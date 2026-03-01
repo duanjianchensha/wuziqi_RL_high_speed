@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>五子棋 AlphaZero — 人机对战</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ── 标题 ─────────────────────────────── -->
+    <header>
+      <h1>⚫ 五子棋 AlphaZero</h1>
+      <p class="subtitle">基于强化学习的人机对战</p>
+    </header>
+
+    <!-- ── 设置面板（新游戏前显示） ─────────── -->
+    <div id="setup-panel" class="panel">
+      <h2>新游戏设置</h2>
+
+      <div class="form-row">
+        <label>执棋颜色</label>
+        <div class="radio-group">
+          <label class="radio-label">
+            <input type="radio" name="color" value="1" checked />
+            <span class="stone black-stone"></span> 黑子（先手）
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="color" value="2" />
+            <span class="stone white-stone"></span> 白子（后手）
+          </label>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label>AI 难度</label>
+        <div class="radio-group">
+          <label class="radio-label"><input type="radio" name="difficulty" value="easy" /> 简单（200次模拟）</label>
+          <label class="radio-label"><input type="radio" name="difficulty" value="medium" checked /> 中等（400次模拟）</label>
+          <label class="radio-label"><input type="radio" name="difficulty" value="hard" /> 困难（800次模拟）</label>
+        </div>
+      </div>
+
+      <button id="btn-start" class="btn btn-primary">开始游戏</button>
+    </div>
+
+    <!-- ── 游戏面板 ─────────────────────────── -->
+    <div id="game-panel" class="panel hidden">
+      <!-- 状态栏 -->
+      <div id="status-bar">
+        <span id="status-text">游戏进行中</span>
+        <span id="player-indicator"></span>
+      </div>
+
+      <!-- AI 思考动画 -->
+      <div id="thinking-bar" class="hidden">
+        <div class="thinking-dot"></div>
+        <div class="thinking-dot"></div>
+        <div class="thinking-dot"></div>
+        <span>AI 思考中…</span>
+      </div>
+
+      <!-- 棋盘 Canvas -->
+      <div id="canvas-wrapper">
+        <canvas id="board-canvas"></canvas>
+      </div>
+
+      <!-- 操作按钮 -->
+      <div class="btn-row">
+        <button id="btn-hint"   class="btn btn-secondary">💡 提示</button>
+        <button id="btn-resign" class="btn btn-danger">🏳 认输</button>
+        <button id="btn-new"    class="btn btn-primary">🔄 新游戏</button>
+      </div>
+
+      <!-- 落子记录 -->
+      <div id="move-log-wrap">
+        <h3>落子记录</h3>
+        <div id="move-log"></div>
+      </div>
+    </div>
+
+    <!-- ── 结果对话框 ─────────────────────────── -->
+    <div id="result-overlay" class="overlay hidden">
+      <div class="result-dialog">
+        <div id="result-icon" class="result-icon"></div>
+        <h2 id="result-title"></h2>
+        <p  id="result-desc"></p>
+        <button id="btn-result-new" class="btn btn-primary" style="margin-top:16px">再来一局</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/board.js"></script>
+  <script src="/static/js/game.js"></script>
+</body>
+</html>

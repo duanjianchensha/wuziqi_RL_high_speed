@@ -1,0 +1,4 @@
+# models 目录 — 保存训练模型权重
+# best_policy.pth     — 当前最优模型（评估胜率 >55% 时更新）
+# current_policy.pth  — 最新迭代模型
+# checkpoints/        — 历史检查点

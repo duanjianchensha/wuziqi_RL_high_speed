@@ -1,0 +1,19 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "pip": true,
+        "/^python -c \"import torch; import fastapi; import uvicorn; print\\('torch:', torch\\.__version__\\); print\\('fastapi:', fastapi\\.__version__\\); print\\('ALL OK'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -c \"import torch; print\\('torch:', torch\\.__version__\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python -c \"print\\('hello'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "type": true,
+        "Start-Job": true
+    }
+}

@@ -1,0 +1,236 @@
+/* ── 全局 ─────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #1a1a2e;
+  --surface:   #16213e;
+  --card:      #0f3460;
+  --accent:    #e94560;
+  --text:      #eaeaea;
+  --text-dim:  #9aacc2;
+  --board-bg:  #d4a96a;
+  --board-line:#8b6c42;
+  --radius:    12px;
+  --shadow:    0 4px 20px rgba(0,0,0,.4);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px 16px 48px;
+}
+
+#app {
+  width: 100%;
+  max-width: 620px;
+}
+
+/* ── 标题 ─────────────────────────────────── */
+header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+header h1 {
+  font-size: 2rem;
+  letter-spacing: .05em;
+  color: var(--text);
+}
+.subtitle {
+  color: var(--text-dim);
+  font-size: .9rem;
+  margin-top: 4px;
+}
+
+/* ── 卡片面板 ──────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow);
+  margin-bottom: 20px;
+}
+.panel h2 {
+  font-size: 1.2rem;
+  margin-bottom: 20px;
+  color: var(--text);
+}
+.hidden { display: none !important; }
+
+/* ── 表单 ──────────────────────────────────── */
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.form-row > label {
+  font-weight: 600;
+  color: var(--text-dim);
+  font-size: .85rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1.5px solid var(--card);
+  transition: border-color .2s, background .2s;
+  font-size: .9rem;
+}
+.radio-label:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(233,69,96,.1);
+}
+.radio-label input { display: none; }
+
+/* ── 棋子图标（小） ────────────────────────── */
+.stone {
+  display: inline-block;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.black-stone { background: #1a1a1a; box-shadow: inset -2px -2px 4px rgba(255,255,255,.2); }
+.white-stone { background: #f0f0f0; box-shadow: inset -2px -2px 4px rgba(0,0,0,.25); border: 1px solid #ccc; }
+
+/* ── 按钮 ──────────────────────────────────── */
+.btn {
+  padding: 10px 22px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: .95rem;
+  font-weight: 600;
+  transition: opacity .15s, transform .1s;
+}
+.btn:hover { opacity: .88; transform: translateY(-1px); }
+.btn:active { opacity: .75; transform: none; }
+.btn:disabled { opacity: .4; cursor: default; transform: none; }
+.btn-primary   { background: var(--accent);  color: #fff; }
+.btn-secondary { background: var(--card);    color: var(--text); }
+.btn-danger    { background: #b33030;        color: #fff; }
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* ── 状态栏 ─────────────────────────────────── */
+#status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: .95rem;
+}
+#status-text   { font-weight: 600; color: var(--text); }
+#player-indicator { color: var(--text-dim); font-size: .85rem; }
+
+/* ── AI 思考动画 ─────────────────────────────── */
+#thinking-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: .85rem;
+  margin-bottom: 10px;
+  height: 22px;
+}
+.thinking-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: bounce 0.8s infinite alternate;
+}
+.thinking-dot:nth-child(2) { animation-delay: .2s; }
+.thinking-dot:nth-child(3) { animation-delay: .4s; }
+@keyframes bounce {
+  from { transform: translateY(0);  opacity: .5; }
+  to   { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ── Canvas 棋盘 ─────────────────────────────── */
+#canvas-wrapper {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0;
+}
+#board-canvas {
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  display: block;
+  touch-action: none;
+}
+
+/* ── 落子记录 ─────────────────────────────────── */
+#move-log-wrap {
+  margin-top: 20px;
+}
+#move-log-wrap h3 {
+  font-size: .9rem;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+#move-log {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 100px;
+  overflow-y: auto;
+}
+.move-tag {
+  background: var(--card);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: .8rem;
+  color: var(--text);
+}
+.move-tag.black { border-left: 3px solid #333; }
+.move-tag.white { border-left: 3px solid #e0e0e0; }
+
+/* ── 结果对话框 ─────────────────────────────── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+.result-dialog {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 40px 48px;
+  text-align: center;
+  box-shadow: var(--shadow);
+  max-width: 340px;
+  width: 90%;
+}
+.result-icon { font-size: 3.5rem; margin-bottom: 12px; }
+#result-title { font-size: 1.5rem; margin-bottom: 8px; }
+#result-desc  { color: var(--text-dim); font-size: .95rem; }
+
+/* ── 热图提示高亮 ─────────────────────────────── */
+.hint-badge {
+  pointer-events: none;
+  position: absolute;
+  background: rgba(233,69,96,.55);
+  border-radius: 50%;
+}
