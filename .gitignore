@@ -1,1 +1,36 @@
 *.pyc
+
+# Python cache
+__pycache__/
+*.pyo
+
+# CMake build artifacts
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Visual Studio / MSVC generated files
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.obj
+*.iobj
+*.ipdb
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Windows build output folders
+x64/
+Debug/
+Release/
+
+# VS/Windows temporary files
+.vs/
+*.tmp
+*.log

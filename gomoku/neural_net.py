@@ -182,6 +182,10 @@ class PolicyValueFunction:
         self.model.train()
         s = torch.from_numpy(states).to(self.device)
         p = torch.from_numpy(mcts_probs).to(self.device)
+        p = torch.nan_to_num(p, nan=0.0, posinf=0.0, neginf=0.0)
+        p = torch.clamp(p, min=0.0)
+        row_sum = p.sum(dim=1, keepdim=True)
+        p = torch.where(row_sum > 0, p / row_sum, torch.full_like(p, 1.0 / p.shape[1]))
         z = torch.from_numpy(winners).to(self.device)
 
         self.optimizer.zero_grad()

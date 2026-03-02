@@ -34,11 +34,22 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
     在子进程中执行 n_games 局自弈，返回训练数据列表。
     args 包含: model_weights(bytes), n_games, n_playout, board_size, n_in_row
     """
-    import io, torch
+    import io, torch, sys, os
     from gomoku.neural_net import PolicyValueNet
-    from gomoku.mcts import MCTSPlayer
     from gomoku.game import Board, Game
     from gomoku.config import config
+
+    # 优先尝试导入 C++ 模块以实现 Phase 2 加速
+    USE_CPP = False
+    try:
+        release_path = os.path.join(os.getcwd(), "Release")
+        if release_path not in sys.path:
+            sys.path.append(release_path)
+        import gomoku_cpp  # type: ignore[import-not-found]
+
+        USE_CPP = True
+    except ImportError:
+        from gomoku.mcts import MCTSPlayer
 
     board_size = args["board_size"]
     n_in_row = args["n_in_row"]
@@ -54,26 +65,72 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
 
     import torch.nn.functional as F
 
-    def policy_value_fn(board):
-        state = board.get_current_state()
+    def policy_value_fn(board_or_state):
+        if USE_CPP:
+            # gomoku_cpp.MCTSPlayer 传入的是 board.get_features() 后的 numpy 数组
+            state = board_or_state
+        else:
+            state = board_or_state.get_current_state()
+
         t = torch.from_numpy(state).unsqueeze(0)
         with torch.no_grad():
             logp, v = net(t)
-        probs = F.softmax(logp, dim=1).squeeze(0).numpy()
-        avail = board.availables
-        return list(zip(avail, probs[avail])), float(v.item())
 
-    player = MCTSPlayer(
-        policy_value_fn, c_puct=config.C_PUCT, n_playout=n_playout, is_selfplay=True
-    )
-    board = Board(board_size, n_in_row)
+        probs = F.softmax(logp, dim=1).squeeze(0).numpy()
+        if USE_CPP:
+            return probs, float(v.item())
+        else:
+            avail = board_or_state.availables
+            return list(zip(avail, probs[avail])), float(v.item())
+
+    if USE_CPP:
+        player = gomoku_cpp.MCTSPlayer(
+            policy_value_fn, c_puct=config.C_PUCT, n_playout=n_playout
+        )
+    else:
+        player = MCTSPlayer(
+            policy_value_fn, c_puct=config.C_PUCT, n_playout=n_playout, is_selfplay=True
+        )
+
+    if USE_CPP:
+        board = gomoku_cpp.Board()
+    else:
+        board = Board(board_size, n_in_row)
+
     game = Game(board)
 
+    import time as _time
+
+    worker_id = args.get("worker_id", "?")
     all_data = []
-    for _ in range(n_games):
-        board.reset()
-        _, play_data = game.start_self_play(player)
+    engine_str = "C++" if USE_CPP else "Python"
+    print(
+        f"  [Worker-{worker_id}] 启动 ({engine_str} 引擎)，执行 {n_games} 局自弈"
+        f"（MCTS模拟={n_playout}次/步，棋盘={board_size}×{board_size}）",
+        flush=True,
+    )
+    for g in range(n_games):
+        t_g = _time.time()
+        if USE_CPP:
+            # C++ Board 由 game.start_self_play 内部处理 init/reset
+            winner, play_data = game.start_self_play(player, is_cpp=True)
+        else:
+            board.reset()
+            winner, play_data = game.start_self_play(player)
+
         all_data.extend(play_data)
+        elapsed_g = _time.time() - t_g
+        move_count = game.board.move_cnt if USE_CPP else game.board.move_count
+        w_str = "黑赢" if winner == 1 else ("白赢" if winner == 2 else "平局")
+        print(
+            f"  [Worker-{worker_id}] 第{g+1}/{n_games}局 "
+            f"{w_str} 共{move_count}步 {engine_str}样本+{len(play_data)} 耗时{elapsed_g:.1f}s",
+            flush=True,
+        )
+    print(
+        f"  [Worker-{worker_id}] 完成，共生成 {len(all_data)} 条样本",
+        flush=True,
+    )
     return all_data
 
 
@@ -84,11 +141,21 @@ class Coach:
     def __init__(self):
         # 初始化 / 加载模型
         best_path = config.BEST_POLICY
+        if os.path.exists(best_path):
+            print(f"[Coach] 发现已有模型，加载中: {best_path}", flush=True)
+        else:
+            print(f"[Coach] 未找到已有模型，将使用随机初始化权重", flush=True)
         self.policy = PolicyValueFunction(
             board_size=config.BOARD_SIZE,
             model_path=best_path if os.path.exists(best_path) else None,
         )
+        print(
+            f"[Coach] 模型初始化完成 | 设备={config.DEVICE} | "
+            f"残差块×{config.N_RES_BLOCKS} | 滤波器={config.N_FILTERS}",
+            flush=True,
+        )
         self.replay_buf = ReplayBuffer(config.BUFFER_SIZE)
+        print(f"[Coach] ReplayBuffer 就绪（容量={config.BUFFER_SIZE:,}）", flush=True)
         self.lr_mult = config.LR_MULTIPLIER  # 自适应学习率倍率
         self.n_games_played = 0
         self.win_ratio_history: List[float] = []
@@ -111,19 +178,44 @@ class Coach:
         }
 
         total_samples = 0
+        t_collect = time.time()
+        print(
+            f"[Coach] 启动 {n_workers} 个 Worker 进程，"
+            f"每个执行 {games_per_worker} 局（MCTS模拟={n_playout}次/步）...",
+            flush=True,
+        )
         # ProcessPoolExecutor 在 Windows spawn 下安全
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = [
-                executor.submit(_selfplay_worker, worker_args) for _ in range(n_workers)
-            ]
+            futures = {
+                executor.submit(
+                    _selfplay_worker,
+                    {**worker_args, "worker_id": i + 1},
+                ): i
+                + 1
+                for i in range(n_workers)
+            }
+            completed = 0
             for fut in as_completed(futures):
+                wid = futures[fut]
+                completed += 1
                 try:
                     data = fut.result()
                     self.replay_buf.push(data)
                     total_samples += len(data)
                     self.n_games_played += games_per_worker
+                    print(
+                        f"[Coach] Worker-{wid} 完成 ({completed}/{n_workers}) "
+                        f"贡献 {len(data)} 样本 | "
+                        f"缓冲池={len(self.replay_buf):,}/{config.BUFFER_SIZE:,}",
+                        flush=True,
+                    )
                 except Exception as e:
-                    print(f"[Coach] worker 异常: {e}")
+                    print(f"[Coach] Worker-{wid} 异常: {e}", flush=True)
+        elapsed_collect = time.time() - t_collect
+        print(
+            f"[Coach] 本轮采集完成: {total_samples} 样本 耗时={elapsed_collect:.1f}s",
+            flush=True,
+        )
         return total_samples
 
     # ── 训练步骤 ──────────────────────────────────
@@ -134,6 +226,13 @@ class Coach:
         """
         lr = config.LR * self.lr_mult
         last_info = {}
+        t_train = time.time()
+        print(
+            f"[Train] 开始训练 {config.EPOCHS_PER_UPDATE} 个 epoch "
+            f"(lr={lr:.2e}, batch={config.BATCH_SIZE}, "
+            f"缓冲池={len(self.replay_buf):,})",
+            flush=True,
+        )
 
         for epoch in range(config.EPOCHS_PER_UPDATE):
             states, probs, winners = self.replay_buf.sample(config.BATCH_SIZE)
@@ -144,9 +243,26 @@ class Coach:
             kl = info["kl"]
             if kl > config.KL_TARGET * 2 and self.lr_mult > 0.1:
                 self.lr_mult /= 1.5
+                lr_tag = "lr↓"
             elif kl < config.KL_TARGET / 2 and self.lr_mult < 10:
                 self.lr_mult *= 1.5
+                lr_tag = "lr↑"
+            else:
+                lr_tag = "lr─"
+            print(
+                f"  [Epoch {epoch+1}/{config.EPOCHS_PER_UPDATE}] "
+                f"loss={info['loss']:.4f} "
+                f"(p={info['loss_p']:.4f} v={info['loss_v']:.4f}) "
+                f"kl={kl:.4f} {lr_tag}",
+                flush=True,
+            )
 
+        elapsed_train = time.time() - t_train
+        print(
+            f"[Train] 训练完成 耗时={elapsed_train:.1f}s "
+            f"lr_mult={self.lr_mult:.3f}",
+            flush=True,
+        )
         last_info["lr"] = lr
         last_info["lr_mult"] = self.lr_mult
         return last_info
@@ -169,22 +285,47 @@ class Coach:
         game = Game(board)
 
         wins, loses, draws = 0, 0, 0
+        t_eval = time.time()
+        print(
+            f"[Eval] 开始评估 {n_games} 局"
+            f"（新模型 vs 纯MCTS-{config.N_PLAYOUT_EVAL}次模拟）",
+            flush=True,
+        )
         for i in range(n_games):
+            t_g = time.time()
             if i % 2 == 0:
                 winner = game.start_play(new_player, pure_player, start_player=1)
                 new_ind = 1
+                role = "新模型执黑"
             else:
                 winner = game.start_play(pure_player, new_player, start_player=1)
                 new_ind = 2
+                role = "新模型执白"
+            elapsed_g = time.time() - t_g
             if winner == new_ind:
                 wins += 1
+                result = "赢"
             elif winner == 0:
                 draws += 1
+                result = "平"
             else:
                 loses += 1
+                result = "负"
+            print(
+                f"  [Eval {i+1}/{n_games}] {role}: {result} "
+                f"| 累计 {wins}W/{draws}D/{loses}L "
+                f"| 耗时{elapsed_g:.1f}s",
+                flush=True,
+            )
 
         win_ratio = (wins + 0.5 * draws) / n_games
-        print(f"[Eval] 新模型: {wins}赢/{draws}平/{loses}负  胜率={win_ratio:.3f}")
+        elapsed_eval = time.time() - t_eval
+        print(
+            f"[Eval] 最终: {wins}赢/{draws}平/{loses}负 "
+            f"胜率={win_ratio:.3f} 阈值={config.WIN_RATIO_THRESHOLD} "
+            f"总耗时={elapsed_eval:.1f}s",
+            flush=True,
+        )
         return win_ratio
 
     # ── 主训练循环 ────────────────────────────────
@@ -209,6 +350,19 @@ class Coach:
         while self.n_games_played < total_games:
             iteration += 1
             t0 = time.time()
+            progress_pct = self.n_games_played / total_games * 100
+            bar_len = 30
+            filled = int(bar_len * self.n_games_played / total_games)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            print(f"\n{'─'*60}", flush=True)
+            print(
+                f"[Iter {iteration}] [{bar}] {progress_pct:.1f}% "
+                f"({self.n_games_played}/{total_games}局) "
+                f"| 最佳胜率={best_ratio:.3f} "
+                f"| 缓冲池={len(self.replay_buf):,}",
+                flush=True,
+            )
+            print(f"{'─'*60}", flush=True)
 
             # 1. 并行自弈采集
             n_w = config.N_WORKERS
@@ -217,9 +371,9 @@ class Coach:
             elapsed = time.time() - t0
 
             print(
-                f"\n[Iter {iteration}] 采集 {samples} 样本 "
-                f"(总局数={self.n_games_played}, 缓冲池={len(self.replay_buf):,}, "
-                f"耗时={elapsed:.1f}s)"
+                f"[Iter {iteration}] 自弈采集完毕: {samples} 样本 "
+                f"(总局数={self.n_games_played}/{total_games}, 耗时={elapsed:.1f}s)",
+                flush=True,
             )
 
             # 2. 训练（缓冲池满足最小批次后才开始）

@@ -14,6 +14,7 @@
             "matchCommandLine": true
         },
         "type": true,
-        "Start-Job": true
+        "Start-Job": true,
+        "scripts\\build.bat": true
     }
 }

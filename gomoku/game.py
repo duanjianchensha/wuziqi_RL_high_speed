@@ -20,7 +20,7 @@ class Board:
     """棋盘状态，提供强化学习环境接口。"""
 
     def __init__(self, size: int = config.BOARD_SIZE, n_in_row: int = config.N_IN_ROW):
-        self.size    = size
+        self.size = size
         self.n_in_row = n_in_row
         self.reset()
 
@@ -30,18 +30,18 @@ class Board:
     def reset(self) -> None:
         """重置棋盘到初始状态。"""
         self.board: np.ndarray = np.zeros((self.size, self.size), dtype=np.int8)
-        self.current_player: int = 1          # 1=黑, 2=白
+        self.current_player: int = 1  # 1=黑, 2=白
         self.last_move: Optional[int] = None  # 最近落子动作
         self.move_count: int = 0
-        self.winner: Optional[int] = None     # None=对战中, 0=平局, 1/2=胜者
+        self.winner: Optional[int] = None  # None=对战中, 0=平局, 1/2=胜者
 
     def copy(self) -> "Board":
         b = Board(self.size, self.n_in_row)
-        b.board         = self.board.copy()
+        b.board = self.board.copy()
         b.current_player = self.current_player
-        b.last_move     = self.last_move
-        b.move_count    = self.move_count
-        b.winner        = self.winner
+        b.last_move = self.last_move
+        b.move_count = self.move_count
+        b.winner = self.winner
         return b
 
     # ──────────────────────────────────────────────
@@ -50,10 +50,12 @@ class Board:
     @property
     def availables(self) -> List[int]:
         """返回所有合法动作列表（扁平化下标）。"""
-        return [r * self.size + c
-                for r in range(self.size)
-                for c in range(self.size)
-                if self.board[r, c] == 0]
+        return [
+            r * self.size + c
+            for r in range(self.size)
+            for c in range(self.size)
+            if self.board[r, c] == 0
+        ]
 
     def action_to_rc(self, action: int) -> Tuple[int, int]:
         return divmod(action, self.size)
@@ -68,13 +70,13 @@ class Board:
         r, c = self.action_to_rc(action)
         assert self.board[r, c] == 0, f"落子位置 ({r},{c}) 已有棋子！"
         self.board[r, c] = self.current_player
-        self.last_move   = action
+        self.last_move = action
         self.move_count += 1
         # 检测胜负
         if self._check_winner(r, c):
             self.winner = self.current_player
         elif not self.availables:
-            self.winner = 0            # 平局
+            self.winner = 0  # 平局
         # 切换玩家
         self.current_player = 3 - self.current_player  # 1↔2
 
@@ -88,7 +90,11 @@ class Board:
             count = 1
             for sign in (1, -1):
                 nr, nc = r + sign * dr, c + sign * dc
-                while 0 <= nr < self.size and 0 <= nc < self.size and self.board[nr, nc] == player:
+                while (
+                    0 <= nr < self.size
+                    and 0 <= nc < self.size
+                    and self.board[nr, nc] == player
+                ):
                     count += 1
                     nr += sign * dr
                     nc += sign * dc
@@ -107,15 +113,15 @@ class Board:
         输出 float32 数组 shape=(4, size, size)，供神经网络使用。
         """
         state = np.zeros((4, self.size, self.size), dtype=np.float32)
-        current  = self.current_player
+        current = self.current_player
         opponent = 3 - current
-        state[0] = (self.board == current).astype(np.float32)   # 己方棋子
+        state[0] = (self.board == current).astype(np.float32)  # 己方棋子
         state[1] = (self.board == opponent).astype(np.float32)  # 对手棋子
         if self.last_move is not None:
             lr, lc = self.action_to_rc(self.last_move)
-            state[2, lr, lc] = 1.0                              # 最近落子
+            state[2, lr, lc] = 1.0  # 最近落子
         if current == 1:
-            state[3] = 1.0                                      # 当前玩家为黑棋
+            state[3] = 1.0  # 当前玩家为黑棋
         return state
 
     # ──────────────────────────────────────────────
@@ -134,11 +140,11 @@ class Board:
         prob_2d = mcts_prob.reshape(n, n)
         samples = []
         for flip in range(2):
-            s    = np.flip(state,   axis=2) if flip else state.copy()
+            s = np.flip(state, axis=2) if flip else state.copy()
             p_2d = np.flip(prob_2d, axis=1) if flip else prob_2d.copy()
             for rot in range(4):
-                s_r    = np.rot90(s,    rot, axes=(1, 2))
-                p_r    = np.rot90(p_2d, rot)
+                s_r = np.rot90(s, rot, axes=(1, 2))
+                p_r = np.rot90(p_2d, rot)
                 samples.append((s_r.copy(), p_r.flatten().copy(), winner))
         return samples
 
@@ -147,10 +153,12 @@ class Board:
     # ──────────────────────────────────────────────
     def __str__(self) -> str:
         symbols = {0: ".", 1: "●", 2: "○"}
-        header  = "   " + " ".join(str(c) for c in range(self.size))
-        rows    = [header]
+        header = "   " + " ".join(str(c) for c in range(self.size))
+        rows = [header]
         for r in range(self.size):
-            row = f"{r:2d} " + " ".join(symbols[self.board[r, c]] for c in range(self.size))
+            row = f"{r:2d} " + " ".join(
+                symbols[self.board[r, c]] for c in range(self.size)
+            )
             rows.append(row)
         return "\n".join(rows)
 
@@ -161,7 +169,9 @@ class Game:
     def __init__(self, board: Optional[Board] = None):
         self.board = board if board else Board()
 
-    def start_play(self, player1, player2, start_player: int = 1, verbose: bool = False):
+    def start_play(
+        self, player1, player2, start_player: int = 1, verbose: bool = False
+    ):
         """
         player1 / player2 需实现 get_action(board) -> int 接口。
         start_player: 1=黑先, 2=白先
@@ -180,28 +190,54 @@ class Game:
             move = p.get_action(self.board)
             self.board.do_move(move)
             if verbose:
-                print(f"Player {3 - self.board.current_player} → {self.board.action_to_rc(move)}")
+                print(
+                    f"Player {3 - self.board.current_player} → {self.board.action_to_rc(move)}"
+                )
                 print(self.board)
         winner = self.board.winner
         if verbose:
             print("Winner:", winner if winner else "Draw")
         return winner
 
-    def start_self_play(self, player, temp: float = 1e-3):
+    def start_self_play(self, player, temp: float = 1e-3, is_cpp: bool = False):
         """
         自我博弈，使用 MCTS 带温度采样。
         返回: (winner, play_data)
           play_data = list of (state, mcts_prob, current_player)
         """
-        self.board.reset()
-        player.reset_player()
+        if is_cpp:
+            # 注意：在 start_self_play 中不重新初始化 Board，
+            # 而是假设 self.board 已经是合适的类型并手动重置。
+            # C++ Board 没有 reset()，我们直接新建一个并赋值。
+            import sys, os
+
+            release_path = os.path.join(os.getcwd(), "Release")
+            if release_path not in sys.path:
+                sys.path.append(release_path)
+            import gomoku_cpp
+
+            self.board = gomoku_cpp.Board()
+            player.reset()
+        else:
+            self.board.reset()
+            player.reset_player()
+
         states, mcts_probs, current_players = [], [], []
 
         while not self.board.game_over():
             # 前 TEMP_THRESHOLD 步高温探索
-            t = 1.0 if self.board.move_count < config.TEMP_THRESHOLD else temp
-            move, move_probs = player.get_action(self.board, temp=t, return_prob=True)
-            states.append(self.board.get_current_state())
+            move_count = self.board.move_cnt if is_cpp else self.board.move_count
+            t = 1.0 if move_count < config.TEMP_THRESHOLD else temp
+
+            if is_cpp:
+                move, move_probs = player.get_move(self.board, t)
+                states.append(self.board.get_features())
+            else:
+                move, move_probs = player.get_action(
+                    self.board, temp=t, return_prob=True
+                )
+                states.append(self.board.get_current_state())
+
             mcts_probs.append(move_probs)
             current_players.append(self.board.current_player)
             self.board.do_move(move)
@@ -210,7 +246,7 @@ class Game:
         # 计算每步的 z 值（从当前玩家视角）
         winners_z = np.zeros(len(current_players), dtype=np.float32)
         if winner != 0:
-            winners_z[np.array(current_players) == winner] =  1.0
+            winners_z[np.array(current_players) == winner] = 1.0
             winners_z[np.array(current_players) != winner] = -1.0
 
         # 对称扩充 → 8× 数据量
