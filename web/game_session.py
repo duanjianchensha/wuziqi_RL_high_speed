@@ -18,9 +18,8 @@ def _round_to_10(v: float) -> int:
 
 def get_difficulty_playout() -> dict:
     """
-    根据训练配置动态生成 web 难度对应的 MCTS 模拟次数。
-    - 训练总局数越大，默认难度整体上调
-    - 与训练 playout 保持同一量级，避免 web 难度与训练配置脱节
+    根据训练配置和Web难度配置生成各难度对应的MCTS模拟次数。
+    支持倍数或绝对值配置。
     """
     total_games = max(1, int(config.N_SELFPLAY_GAMES))
     train_playout = int(config.N_PLAYOUT_TRAIN)
@@ -35,13 +34,28 @@ def get_difficulty_playout() -> dict:
             train_playout = int(profile.get("n_playout_train", train_playout))
         except Exception:
             pass
+
     # 以 500 局为基准，限制缩放范围，避免极端值
     scale = max(0.6, min(1.6, total_games / 500.0))
     base = int(train_playout * scale)
 
-    easy = max(80, _round_to_10(base * 0.6))
-    medium = max(easy + 20, _round_to_10(base * 1.0))
-    hard = max(medium + 20, _round_to_10(base * 1.8))
+    result = {}
+    for difficulty in ["easy", "medium", "hard"]:
+        # 优先检查绝对值配置
+        absolute_playout = config.WEB_DIFFICULTY_PLAYOUTS.get(difficulty)
+        if absolute_playout is not None:
+            result[difficulty] = max(10, int(absolute_playout))  # 最小10次模拟
+        else:
+            # 使用倍数配置
+            multiplier = config.WEB_DIFFICULTY_MULTIPLIERS.get(difficulty, 1.0)
+            playout = max(80, _round_to_10(base * multiplier))
+            result[difficulty] = playout
+
+    # 确保难度递增：easy <= medium <= hard
+    easy = result["easy"]
+    medium = max(easy, result["medium"])
+    hard = max(medium, result["hard"])
+
     return {
         "easy": easy,
         "medium": medium,

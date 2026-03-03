@@ -68,6 +68,9 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
     except RuntimeError:
         pass
 
+    # 获取Worker推理设备配置（默认cpu以防多进程OOM）
+    worker_device = getattr(config, "WORKER_DEVICE", "cpu")
+
     # 复用本地网络对象，减少重复构建开销
     global _WORKER_NET, _WORKER_BOARD_SIZE
     if _WORKER_NET is None or _WORKER_BOARD_SIZE != board_size:
@@ -76,7 +79,8 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
 
     net = _WORKER_NET
     buf = io.BytesIO(weights)
-    net.load_state_dict(torch.load(buf, map_location="cpu", weights_only=True))
+    net.load_state_dict(torch.load(buf, map_location=worker_device, weights_only=True))
+    net.to(worker_device)
     net.eval()
 
     import torch.nn.functional as F
@@ -88,11 +92,11 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
         else:
             state = board_or_state.get_current_state()
 
-        t = torch.from_numpy(state).unsqueeze(0)
+        t = torch.from_numpy(state).unsqueeze(0).to(worker_device)
         with torch.no_grad():
             logp, v = net(t)
 
-        probs = F.softmax(logp, dim=1).squeeze(0).numpy()
+        probs = F.softmax(logp, dim=1).squeeze(0).cpu().numpy()
         if USE_CPP:
             return probs, float(v.item())
         else:

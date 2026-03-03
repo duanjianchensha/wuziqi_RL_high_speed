@@ -16,8 +16,8 @@ class Config:
 
     # ───────── 神经网络 ─────────
     # CPU 模式使用较小网络；迁移 GPU 后可调大
-    N_FILTERS: int = 64  # 残差块滤波器数（GPU 可改为 128/256）
-    N_RES_BLOCKS: int = 5  # 残差块数量
+    N_FILTERS: int = 128  # 残差块滤波器数（平衡性能与容量：128对15x15通常已经足够）
+    N_RES_BLOCKS: int = 7  # 残差块数量
     L2_CONST: float = 1e-4  # L2 正则化系数
     LR: float = 2e-3  # 初始学习率（重置以跳出局部最优）
 
@@ -35,6 +35,20 @@ class Config:
     DIRICHLET_ALPHA: float = 1.0  # Dirichlet 噪声 α（8x8 棋盘建议加大探索）
     DIRICHLET_EPS: float = 0.25  # 噪声混合比例
     TEMP_THRESHOLD: int = 15  # 前 N 步高温探索，之后 → 0
+
+    # ───────── Web 难度配置 ─────────
+    # Web界面不同难度对应的MCTS模拟次数倍数（相对于训练时的N_PLAYOUT_TRAIN）
+    WEB_DIFFICULTY_MULTIPLIERS: dict = {
+        "easy": 0.6,  # 简单：训练模拟次数的0.6倍
+        "medium": 1.0,  # 中等：训练模拟次数的1.0倍
+        "hard": 1.8,  # 困难：训练模拟次数的1.8倍
+    }
+    # 或者直接指定绝对模拟次数（优先级高于倍数，如果设置了非None值）
+    WEB_DIFFICULTY_PLAYOUTS: dict = {
+        "easy": None,  # None表示使用倍数计算，设置数字则使用绝对值
+        "medium": None,
+        "hard": None,
+    }
 
     # ───────── 自弈与训练 ─────────
     N_SELFPLAY_GAMES: int = 5000  # 总自弈局数达到此值前持续迭代
@@ -54,6 +68,8 @@ class Config:
 
     # ───────── 硬件 ─────────
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
+    # Worker自弈推理时的设备。若设为设备如 "cuda"，多进程下会占用大量显存，此时建议降低 N_WORKERS (如 2-4)
+    WORKER_DEVICE: str = "cpu"
 
     # ───────── 路径 ─────────
     MODEL_DIR: str = "models"
