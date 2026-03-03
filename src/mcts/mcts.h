@@ -19,8 +19,8 @@ namespace mcts
 {
 
     // NN 推理回调类型（由 Python 侧提供）
-    // 输入: 特征数组 (4 * N_SQUARES floats)
-    // 输出: (policy probs N_SQUARES floats, value float)
+    // 输入: 特征数组 (4 * board.n_squares() floats)
+    // 输出: (policy probs board.n_squares() floats, value float)
     using InferenceFn = std::function<void(
         const float *state_in, // (4, N, N) 展平
         float *probs_out,      // (N*N,)
@@ -39,7 +39,7 @@ namespace mcts
         }
 
         // 执行 n_playout 次模拟，返回根节点处各动作访问次数分布
-        // actions_out, visits_out: 调用方分配（至少 N_SQUARES 大小）
+        // actions_out, visits_out: 调用方分配（至少 board.n_squares() 大小）
         int search(const gomoku::Board &board,
                    int *actions_out, float *probs_out,
                    float temp = 1e-3f)
@@ -171,9 +171,10 @@ namespace mcts
                 if (!node->expanded)
                 {
                     // 调用 Python NN 推理
-                    std::vector<float> features(4 * gomoku::N_SQUARES);
+                    int ns = board.n_squares();
+                    std::vector<float> features(4 * ns);
                     board.get_features(features.data());
-                    std::vector<float> probs(gomoku::N_SQUARES, 0.f);
+                    std::vector<float> probs(ns, 0.f);
                     infer_fn_(features.data(), probs.data(), leaf_value);
 
                     // 扩展子节点

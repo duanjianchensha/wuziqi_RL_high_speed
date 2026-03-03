@@ -11,7 +11,7 @@ import torch
 
 class Config:
     # ───────── 棋盘 ─────────
-    BOARD_SIZE: int = 8  # 棋盘大小（8×8 便于 CPU 快速训练）
+    BOARD_SIZE: int = 15  # 棋盘大小（15×15 便于 CPU 快速训练）
     N_IN_ROW: int = 5  # 五子棋胜利条件
 
     # ───────── 神经网络 ─────────
@@ -23,7 +23,13 @@ class Config:
 
     # ───────── MCTS ─────────
     C_PUCT: float = 5.0  # PUCT 探索常数
-    N_PLAYOUT_TRAIN: int = 400  # 自弈时每步模拟次数（CPU 降级；GPU 可调至 800）
+    N_PLAYOUT_TRAIN: int = 300  # 自弈时每步模拟次数（提速默认值）
+    ENABLE_PLAYOUT_SCHEDULE: bool = True  # 是否启用按训练进度自动调度 playout
+    PLAYOUT_EARLY: int = 200  # 前期 playout
+    PLAYOUT_MID: int = 300  # 中期 playout
+    PLAYOUT_LATE: int = 400  # 后期 playout
+    PLAYOUT_STAGE1_RATIO: float = 0.30  # 前期结束进度比例
+    PLAYOUT_STAGE2_RATIO: float = 0.70  # 中期结束进度比例
     N_PLAYOUT_EVAL: int = 800  # 评估时模拟次数
     N_PLAYOUT_HUMAN: int = 400  # Web 对战时（简单=200, 中=400, 难=800）
     DIRICHLET_ALPHA: float = 1.0  # Dirichlet 噪声 α（8x8 棋盘建议加大探索）
@@ -31,7 +37,7 @@ class Config:
     TEMP_THRESHOLD: int = 15  # 前 N 步高温探索，之后 → 0
 
     # ───────── 自弈与训练 ─────────
-    N_SELFPLAY_GAMES: int = 500  # 总自弈局数达到此值前持续迭代
+    N_SELFPLAY_GAMES: int = 5000  # 总自弈局数达到此值前持续迭代
     BUFFER_SIZE: int = 50000  # 回放池容量（增加数据多样性和学习跨度）
     BATCH_SIZE: int = 512  # 训练 mini-batch 大小（增加单次训练质量）
     EPOCHS_PER_UPDATE: int = 10  # 每次更新时训练 epoch 数（确保样本被消化）
@@ -43,7 +49,7 @@ class Config:
 
     # ───────── 多进程自弈 ─────────
     # 工作进程数：默认使用 CPU 核心数（留 1 核给主进程）
-    N_WORKERS: int = max(1, (os.cpu_count() or 2) - 1)
+    N_WORKERS: int = min(16, max(1, (os.cpu_count() or 2) // 2))
     GAMES_PER_WORKER: int = 1  # 每个 worker 每轮完成的局数
 
     # ───────── 硬件 ─────────

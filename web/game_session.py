@@ -5,17 +5,48 @@ web/game_session.py
 
 import uuid
 import time
+import os
+import json
 from typing import Dict, Optional
 from gomoku.game import Board
 from gomoku.config import config
 
 
-# 难度 → MCTS 模拟次数
-DIFFICULTY_PLAYOUT = {
-    "easy":   200,
-    "medium": 400,
-    "hard":   800,
-}
+def _round_to_10(v: float) -> int:
+    return int(round(v / 10.0) * 10)
+
+
+def get_difficulty_playout() -> dict:
+    """
+    根据训练配置动态生成 web 难度对应的 MCTS 模拟次数。
+    - 训练总局数越大，默认难度整体上调
+    - 与训练 playout 保持同一量级，避免 web 难度与训练配置脱节
+    """
+    total_games = max(1, int(config.N_SELFPLAY_GAMES))
+    train_playout = int(config.N_PLAYOUT_TRAIN)
+
+    # 若存在最近训练配置，则优先使用（支持 train.py 命令行覆盖后的自动同步）
+    profile_path = os.path.join(config.MODEL_DIR, "latest_train_profile.json")
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path, "r", encoding="utf-8") as f:
+                profile = json.load(f)
+            total_games = max(1, int(profile.get("n_selfplay_games", total_games)))
+            train_playout = int(profile.get("n_playout_train", train_playout))
+        except Exception:
+            pass
+    # 以 500 局为基准，限制缩放范围，避免极端值
+    scale = max(0.6, min(1.6, total_games / 500.0))
+    base = int(train_playout * scale)
+
+    easy = max(80, _round_to_10(base * 0.6))
+    medium = max(easy + 20, _round_to_10(base * 1.0))
+    hard = max(medium + 20, _round_to_10(base * 1.8))
+    return {
+        "easy": easy,
+        "medium": medium,
+        "hard": hard,
+    }
 
 
 class GameSession:
@@ -25,22 +56,27 @@ class GameSession:
     ai_player:    3 - human_player
     """
 
-    def __init__(self, session_id: str, human_player: int = 1,
-                 difficulty: str = "medium"):
-        self.session_id  = session_id
+    def __init__(
+        self, session_id: str, human_player: int = 1, difficulty: str = "medium"
+    ):
+        difficulty_playout = get_difficulty_playout()
+        self.session_id = session_id
         self.human_player = human_player
-        self.ai_player    = 3 - human_player
-        self.difficulty   = difficulty
-        self.n_playout    = DIFFICULTY_PLAYOUT.get(difficulty, 400)
-        self.board        = Board(config.BOARD_SIZE, config.N_IN_ROW)
-        self.created_at   = time.time()
-        self.last_active  = time.time()
+        self.ai_player = 3 - human_player
+        self.difficulty = difficulty
+        self.n_playout = difficulty_playout.get(
+            difficulty, difficulty_playout["medium"]
+        )
+        self.board = Board(config.BOARD_SIZE, config.N_IN_ROW)
+        self.created_at = time.time()
+        self.last_active = time.time()
         self._mcts_player = None  # 延迟初始化
 
     def get_mcts_player(self, policy_value_fn):
         """惰性创建 MCTSPlayer（每次请求复用，树复用减少计算量）。"""
         if self._mcts_player is None:
             from gomoku.mcts import MCTSPlayer
+
             self._mcts_player = MCTSPlayer(
                 policy_value_fn,
                 c_puct=config.C_PUCT,
@@ -57,18 +93,19 @@ class GameSession:
         """序列化给前端的状态。"""
         self.touch()
         return {
-            "session_id":   self.session_id,
-            "board":        self.board.board.tolist(),
-            "board_size":   self.board.size,
-            "n_in_row":     self.board.n_in_row,
+            "session_id": self.session_id,
+            "board": self.board.board.tolist(),
+            "board_size": self.board.size,
+            "n_in_row": self.board.n_in_row,
             "current_player": int(self.board.current_player),
             "human_player": self.human_player,
-            "ai_player":    self.ai_player,
-            "last_move":    self.board.last_move,
-            "move_count":   self.board.move_count,
-            "game_over":    self.board.game_over(),
-            "winner":       self.board.winner,
-            "difficulty":   self.difficulty,
+            "ai_player": self.ai_player,
+            "last_move": self.board.last_move,
+            "move_count": self.board.move_count,
+            "game_over": self.board.game_over(),
+            "winner": self.board.winner,
+            "difficulty": self.difficulty,
+            "n_playout": self.n_playout,
         }
 
 
@@ -97,8 +134,9 @@ class SessionManager:
         self._sessions.pop(session_id, None)
 
     def _cleanup(self) -> None:
-        now  = time.time()
-        dead = [sid for sid, s in self._sessions.items()
-                if now - s.last_active > self.TTL]
+        now = time.time()
+        dead = [
+            sid for sid, s in self._sessions.items() if now - s.last_active > self.TTL
+        ]
         for sid in dead:
             del self._sessions[sid]

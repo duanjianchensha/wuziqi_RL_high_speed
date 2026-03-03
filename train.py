@@ -9,20 +9,31 @@ train.py — 训练入口
 
 import argparse
 import multiprocessing as mp
+import os
+import json
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="五子棋 AlphaZero 训练")
-    p.add_argument("--games",   type=int, default=None,
-                   help="总自弈局数（默认读 config.N_SELFPLAY_GAMES）")
-    p.add_argument("--playout", type=int, default=None,
-                   help="每步 MCTS 模拟次数（默认读 config.N_PLAYOUT_TRAIN）")
-    p.add_argument("--workers", type=int, default=None,
-                   help="并行 worker 数（默认 CPU核心数-1）")
-    p.add_argument("--batch",   type=int, default=None,
-                   help="训练 batch size")
-    p.add_argument("--resume",  action="store_true",
-                   help="从 best_policy.pth 继续训练（默认行为）")
+    p.add_argument(
+        "--games",
+        type=int,
+        default=None,
+        help="总自弈局数（默认读 config.N_SELFPLAY_GAMES）",
+    )
+    p.add_argument(
+        "--playout",
+        type=int,
+        default=None,
+        help="每步 MCTS 模拟次数（默认读 config.N_PLAYOUT_TRAIN）",
+    )
+    p.add_argument(
+        "--workers", type=int, default=None, help="并行 worker 数（默认 CPU核心数-1）"
+    )
+    p.add_argument("--batch", type=int, default=None, help="训练 batch size")
+    p.add_argument(
+        "--resume", action="store_true", help="从 best_policy.pth 继续训练（默认行为）"
+    )
     return p.parse_args()
 
 
@@ -31,14 +42,32 @@ def main():
 
     # 在 import 之前应用命令行覆盖
     from gomoku.config import config
+
     if args.games:
         config.N_SELFPLAY_GAMES = args.games
     if args.playout:
         config.N_PLAYOUT_TRAIN = args.playout
+        config.ENABLE_PLAYOUT_SCHEDULE = False
     if args.workers:
         config.N_WORKERS = args.workers
     if args.batch:
         config.BATCH_SIZE = args.batch
+
+    # 持久化本次训练配置，供 Web 端动态难度读取
+    os.makedirs(config.MODEL_DIR, exist_ok=True)
+    profile_path = os.path.join(config.MODEL_DIR, "latest_train_profile.json")
+    with open(profile_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "n_selfplay_games": int(config.N_SELFPLAY_GAMES),
+                "n_playout_train": int(config.N_PLAYOUT_TRAIN),
+                "n_workers": int(config.N_WORKERS),
+                "batch_size": int(config.BATCH_SIZE),
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
     # 打印配置摘要
     print("=" * 55)
@@ -54,6 +83,7 @@ def main():
     print("=" * 55)
 
     from gomoku.coach import Coach
+
     coach = Coach()
     coach.run(config.N_SELFPLAY_GAMES)
 

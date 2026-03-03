@@ -219,13 +219,36 @@ class PolicyValueFunction:
 
     # ── 持久化 ────────────────────────────────────
     def save(self, path: str) -> None:
-        torch.save(
-            {
-                "model": self.model.state_dict(),
-                "optimizer": self.optimizer.state_dict(),
-            },
-            path,
-        )
+        import time
+
+        dirpath = os.path.dirname(path) or "."
+        os.makedirs(dirpath, exist_ok=True)
+
+        if os.path.isdir(path):
+            raise RuntimeError(f"保存失败：目标路径是目录而非文件: {path}")
+
+        payload = {
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+        }
+
+        last_err = None
+        for _ in range(3):
+            tmp_path = f"{path}.tmp"
+            try:
+                torch.save(payload, tmp_path)
+                os.replace(tmp_path, path)  # 原子替换
+                return
+            except Exception as e:
+                last_err = e
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+                time.sleep(0.2)
+
+        raise RuntimeError(f"模型保存失败: {path} | 原因: {last_err}")
 
     def load(self, path: str) -> None:
         ckpt = torch.load(path, map_location=self.device, weights_only=True)

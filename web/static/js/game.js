@@ -13,37 +13,52 @@
 
   // ── DOM 引用 ────────────────────────────────
   const $ = id => document.getElementById(id);
-  const setupPanel    = $("setup-panel");
-  const gamePanel     = $("game-panel");
-  const statusText    = $("status-text");
+  const setupPanel = $("setup-panel");
+  const gamePanel = $("game-panel");
+  const statusText = $("status-text");
   const playerIndicator = $("player-indicator");
-  const thinkingBar   = $("thinking-bar");
-  const moveLog       = $("move-log");
+  const thinkingBar = $("thinking-bar");
+  const moveLog = $("move-log");
   const resultOverlay = $("result-overlay");
-  const resultIcon    = $("result-icon");
-  const resultTitle   = $("result-title");
-  const resultDesc    = $("result-desc");
-  const canvas        = $("board-canvas");
+  const resultIcon = $("result-icon");
+  const resultTitle = $("result-title");
+  const resultDesc = $("result-desc");
+  const canvas = $("board-canvas");
 
-  const btnStart     = $("btn-start");
-  const btnHint      = $("btn-hint");
-  const btnResign    = $("btn-resign");
-  const btnNew       = $("btn-new");
+  const btnStart = $("btn-start");
+  const btnHint = $("btn-hint");
+  const btnResign = $("btn-resign");
+  const btnNew = $("btn-new");
   const btnResultNew = $("btn-result-new");
+  const difficultyEasyLabel = $("difficulty-easy");
+  const difficultyMediumLabel = $("difficulty-medium");
+  const difficultyHardLabel = $("difficulty-hard");
 
   // ── 游戏状态 ─────────────────────────────────
-  let renderer   = null;
-  let sessionId  = null;
-  let gameState  = null;   // 最近服务器返回的状态
-  let waiting    = false;  // 是否正在等待 AI / 服务器
-  const BOARD_SIZE = 8;    // 与后端 config 保持一致
-  const COLS = "ABCDEFGHJKLMNOP";
+  let renderer = null;
+  let sessionId = null;
+  let gameState = null;   // 最近服务器返回的状态
+  let waiting = false;  // 是否正在等待 AI / 服务器
+  let boardSize = 8;
+  let canvasEventsBound = false;
+
+  function getColLabel(col) {
+    const alphabet = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+    if (col < alphabet.length) return alphabet[col];
+    let n = col;
+    let out = "";
+    while (n >= 0) {
+      out = alphabet[n % alphabet.length] + out;
+      n = Math.floor(n / alphabet.length) - 1;
+    }
+    return out;
+  }
 
   // ── 工具 ─────────────────────────────────────
   function action2rc(action) {
-    return { r: Math.floor(action / BOARD_SIZE), c: action % BOARD_SIZE };
+    return { r: Math.floor(action / boardSize), c: action % boardSize };
   }
-  function rc2action(r, c) { return r * BOARD_SIZE + c; }
+  function rc2action(r, c) { return r * boardSize + c; }
 
   async function api(method, path, body) {
     const opts = { method, headers: { "Content-Type": "application/json" } };
@@ -56,12 +71,33 @@
     return res.json();
   }
 
-  // ── 初始化渲染器 ─────────────────────────────
-  function initRenderer(humanPlayer) {
-    renderer = new BoardRenderer(canvas, BOARD_SIZE);
-    renderer.humanPlayer = humanPlayer;
+  async function loadDifficultyConfig() {
+    try {
+      const data = await api("GET", "/api/difficulty_config");
+      const cfg = data.difficulty_playout || {};
+      if (difficultyEasyLabel) {
+        difficultyEasyLabel.innerHTML =
+          '<input type="radio" name="difficulty" value="easy" /> 简单（' + (cfg.easy ?? "-") + '次模拟）';
+      }
+      if (difficultyMediumLabel) {
+        difficultyMediumLabel.innerHTML =
+          '<input type="radio" name="difficulty" value="medium" checked /> 中等（' + (cfg.medium ?? "-") + '次模拟）';
+      }
+      if (difficultyHardLabel) {
+        difficultyHardLabel.innerHTML =
+          '<input type="radio" name="difficulty" value="hard" /> 困难（' + (cfg.hard ?? "-") + '次模拟）';
+      }
+    } catch (e) {
+      console.warn("加载动态难度配置失败，使用默认文案", e);
+    }
+  }
+
+  function bindCanvasEventsOnce() {
+    if (canvasEventsBound) return;
+
     // 鼠标悬停
     canvas.addEventListener("mousemove", e => {
+      if (!renderer) return;
       if (!gameState || gameState.game_over || waiting) return;
       if (gameState.current_player !== gameState.human_player) return;
       const rect = canvas.getBoundingClientRect();
@@ -69,13 +105,17 @@
       if (cell) renderer.setHover(cell.r, cell.c);
       else renderer.setHover(null, null);
     });
-    canvas.addEventListener("mouseleave", () => renderer.setHover(null, null));
+    canvas.addEventListener("mouseleave", () => {
+      if (!renderer) return;
+      renderer.setHover(null, null);
+    });
 
     // 点击落子
     canvas.addEventListener("click", e => {
+      if (!renderer) return;
       if (!gameState || gameState.game_over || waiting) return;
       if (gameState.current_player !== gameState.human_player) return;
-      const rect   = canvas.getBoundingClientRect();
+      const rect = canvas.getBoundingClientRect();
       const action = renderer.pixelToAction(e.clientX - rect.left, e.clientY - rect.top);
       if (action === null) return;
       doHumanMove(action);
@@ -83,20 +123,31 @@
 
     // 触摸支持
     canvas.addEventListener("touchend", e => {
+      if (!renderer) return;
       e.preventDefault();
       if (!gameState || gameState.game_over || waiting) return;
       if (gameState.current_player !== gameState.human_player) return;
-      const touch  = e.changedTouches[0];
-      const rect   = canvas.getBoundingClientRect();
+      const touch = e.changedTouches[0];
+      const rect = canvas.getBoundingClientRect();
       const action = renderer.pixelToAction(
         touch.clientX - rect.left, touch.clientY - rect.top);
       if (action !== null) doHumanMove(action);
     }, { passive: false });
+
+    canvasEventsBound = true;
+  }
+
+  // ── 初始化渲染器 ─────────────────────────────
+  function initRenderer(humanPlayer, size) {
+    renderer = new BoardRenderer(canvas, size);
+    renderer.humanPlayer = humanPlayer;
+    bindCanvasEventsOnce();
   }
 
   // ── 更新棋盘显示 ─────────────────────────────
   function applyState(state) {
     gameState = state;
+    boardSize = state.board_size || boardSize;
     renderer.setState(state.board, state.last_move, state.human_player);
     updateStatusBar(state);
     if (state.game_over) showResult(state);
@@ -119,9 +170,9 @@
   // ── 落子记录 ─────────────────────────────────
   function addMoveLog(action, player, extra) {
     const { r, c } = action2rc(action);
-    const tag  = document.createElement("span");
+    const tag = document.createElement("span");
     tag.className = `move-tag ${player === 1 ? "black" : "white"}`;
-    tag.textContent = `${COLS[c]}${BOARD_SIZE - r}${extra || ""}`;
+    tag.textContent = `${getColLabel(c)}${boardSize - r}${extra || ""}`;
     moveLog.appendChild(tag);
     moveLog.scrollLeft = 99999;
   }
@@ -199,7 +250,7 @@
     gamePanel.classList.add("hidden");
     setupPanel.classList.remove("hidden");
     sessionId = null;
-    gameState  = null;
+    gameState = null;
     moveLog.innerHTML = "";
   }
   btnNew.addEventListener("click", resetToSetup);
@@ -209,7 +260,7 @@
   btnStart.addEventListener("click", async () => {
     const humanPlayer = parseInt(
       document.querySelector('input[name="color"]:checked').value);
-    const difficulty  = document.querySelector('input[name="difficulty"]:checked').value;
+    const difficulty = document.querySelector('input[name="difficulty"]:checked').value;
 
     btnStart.disabled = true;
     btnStart.textContent = "正在连接…";
@@ -221,7 +272,8 @@
       gamePanel.classList.remove("hidden");
       moveLog.innerHTML = "";
 
-      initRenderer(humanPlayer);
+      boardSize = state.board_size || boardSize;
+      initRenderer(humanPlayer, boardSize);
       applyState(state);
 
       // 若人类执白（AI 先手），立即触发 AI 落子
@@ -246,9 +298,9 @@
     } else {
       icon = "🤖"; title = "AI 赢了"; desc = "不要气馁，再试一次！";
     }
-    resultIcon.textContent  = icon;
+    resultIcon.textContent = icon;
     resultTitle.textContent = title;
-    resultDesc.textContent  = desc;
+    resultDesc.textContent = desc;
     // 延迟显示，等动画完毕
     setTimeout(() => resultOverlay.classList.remove("hidden"), 600);
   }
@@ -257,11 +309,13 @@
   function setWaiting(flag) {
     waiting = flag;
     canvas.style.cursor = flag ? "wait" : "pointer";
-    btnHint.disabled    = flag;
-    btnResign.disabled  = flag;
+    btnHint.disabled = flag;
+    btnResign.disabled = flag;
   }
 
   function showThinking(flag) {
     thinkingBar.classList.toggle("hidden", !flag);
   }
+
+  loadDifficultyConfig();
 })();

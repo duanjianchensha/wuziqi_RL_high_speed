@@ -1,0 +1,6 @@
+{
+  "n_selfplay_games": 5000,
+  "n_playout_train": 300,
+  "n_workers": 20,
+  "batch_size": 512
+}

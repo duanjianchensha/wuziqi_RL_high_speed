@@ -26,6 +26,10 @@ from gomoku.neural_net import PolicyValueFunction
 from gomoku.replay_buffer import ReplayBuffer
 
 
+_WORKER_NET = None
+_WORKER_BOARD_SIZE = None
+
+
 # ────────────────────────────────────────────────
 # Worker 函数（必须为顶层函数，Windows spawn 兼容）
 # ────────────────────────────────────────────────
@@ -57,8 +61,20 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
     n_games = args["n_games"]
     weights = args["model_weights"]
 
-    # 构建本地网络（CPU 即可，工作进程不需要 GPU）
-    net = PolicyValueNet(board_size)
+    # 限制每个 worker 的线程占用，避免多进程下 CPU 过度竞争
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+
+    # 复用本地网络对象，减少重复构建开销
+    global _WORKER_NET, _WORKER_BOARD_SIZE
+    if _WORKER_NET is None or _WORKER_BOARD_SIZE != board_size:
+        _WORKER_NET = PolicyValueNet(board_size)
+        _WORKER_BOARD_SIZE = board_size
+
+    net = _WORKER_NET
     buf = io.BytesIO(weights)
     net.load_state_dict(torch.load(buf, map_location="cpu", weights_only=True))
     net.eval()
@@ -85,7 +101,10 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
 
     if USE_CPP:
         player = gomoku_cpp.MCTSPlayer(
-            policy_value_fn, c_puct=config.C_PUCT, n_playout=n_playout
+            policy_value_fn,
+            c_puct=config.C_PUCT,
+            n_playout=n_playout,
+            board_size=board_size,
         )
     else:
         player = MCTSPlayer(
@@ -93,7 +112,7 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
         )
 
     if USE_CPP:
-        board = gomoku_cpp.Board()
+        board = gomoku_cpp.Board(board_size, n_in_row)
     else:
         board = Board(board_size, n_in_row)
 
@@ -160,6 +179,23 @@ class Coach:
         self.n_games_played = 0
         self.win_ratio_history: List[float] = []
 
+        # 持久化进程池：避免每轮重复 spawn 带来的额外开销
+        self.executor = ProcessPoolExecutor(
+            max_workers=config.N_WORKERS,
+            mp_context=mp.get_context("spawn"),
+        )
+
+    def _get_scheduled_playout(self, total_games: int) -> int:
+        if not config.ENABLE_PLAYOUT_SCHEDULE:
+            return config.N_PLAYOUT_TRAIN
+
+        progress = self.n_games_played / max(1, total_games)
+        if progress < config.PLAYOUT_STAGE1_RATIO:
+            return config.PLAYOUT_EARLY
+        if progress < config.PLAYOUT_STAGE2_RATIO:
+            return config.PLAYOUT_MID
+        return config.PLAYOUT_LATE
+
     # ── 并行自弈（ProcessPoolExecutor）────────────
     def _collect_selfplay_data(
         self, n_workers: int, games_per_worker: int, n_playout: int
@@ -184,33 +220,31 @@ class Coach:
             f"每个执行 {games_per_worker} 局（MCTS模拟={n_playout}次/步）...",
             flush=True,
         )
-        # ProcessPoolExecutor 在 Windows spawn 下安全
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            futures = {
-                executor.submit(
-                    _selfplay_worker,
-                    {**worker_args, "worker_id": i + 1},
-                ): i
-                + 1
-                for i in range(n_workers)
-            }
-            completed = 0
-            for fut in as_completed(futures):
-                wid = futures[fut]
-                completed += 1
-                try:
-                    data = fut.result()
-                    self.replay_buf.push(data)
-                    total_samples += len(data)
-                    self.n_games_played += games_per_worker
-                    print(
-                        f"[Coach] Worker-{wid} 完成 ({completed}/{n_workers}) "
-                        f"贡献 {len(data)} 样本 | "
-                        f"缓冲池={len(self.replay_buf):,}/{config.BUFFER_SIZE:,}",
-                        flush=True,
-                    )
-                except Exception as e:
-                    print(f"[Coach] Worker-{wid} 异常: {e}", flush=True)
+        futures = {
+            self.executor.submit(
+                _selfplay_worker,
+                {**worker_args, "worker_id": i + 1},
+            ): i
+            + 1
+            for i in range(n_workers)
+        }
+        completed = 0
+        for fut in as_completed(futures):
+            wid = futures[fut]
+            completed += 1
+            try:
+                data = fut.result()
+                self.replay_buf.push(data)
+                total_samples += len(data)
+                self.n_games_played += games_per_worker
+                print(
+                    f"[Coach] Worker-{wid} 完成 ({completed}/{n_workers}) "
+                    f"贡献 {len(data)} 样本 | "
+                    f"缓冲池={len(self.replay_buf):,}/{config.BUFFER_SIZE:,}",
+                    flush=True,
+                )
+            except Exception as e:
+                print(f"[Coach] Worker-{wid} 异常: {e}", flush=True)
         elapsed_collect = time.time() - t_collect
         print(
             f"[Coach] 本轮采集完成: {total_samples} 样本 耗时={elapsed_collect:.1f}s",
@@ -365,9 +399,17 @@ class Coach:
             print(f"{'─'*60}", flush=True)
 
             # 1. 并行自弈采集
-            n_w = config.N_WORKERS
             n_gw = config.GAMES_PER_WORKER
-            samples = self._collect_selfplay_data(n_w, n_gw, config.N_PLAYOUT_TRAIN)
+            remaining_games = total_games - self.n_games_played
+            max_workers_by_remaining = max(1, (remaining_games + n_gw - 1) // n_gw)
+            n_w = min(config.N_WORKERS, max_workers_by_remaining)
+            current_playout = self._get_scheduled_playout(total_games)
+            print(
+                f"[Iter {iteration}] 本轮调度: playout={current_playout} "
+                f"(schedule={'ON' if config.ENABLE_PLAYOUT_SCHEDULE else 'OFF'})",
+                flush=True,
+            )
+            samples = self._collect_selfplay_data(n_w, n_gw, current_playout)
             elapsed = time.time() - t0
 
             print(
@@ -425,3 +467,4 @@ class Coach:
 
         print(f"\n[Coach] 训练完成！最佳胜率={best_ratio:.3f}")
         self.policy.save(config.BEST_POLICY)
+        self.executor.shutdown(wait=True)

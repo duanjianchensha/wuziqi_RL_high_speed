@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from web.game_session import SessionManager
+from web.game_session import SessionManager, get_difficulty_playout
 from gomoku.config import config
 from gomoku.neural_net import PolicyValueFunction
 
@@ -53,7 +53,9 @@ def get_model() -> PolicyValueFunction:
             model_path=best if os.path.exists(best) else None,
         )
         if not os.path.exists(best):
-            print("[Web] 警告：未找到 best_policy.pth，使用随机初始化网络（先训练再使用）")
+            print(
+                "[Web] 警告：未找到 best_policy.pth，使用随机初始化网络（先训练再使用）"
+            )
     return _model
 
 
@@ -61,8 +63,8 @@ def get_model() -> PolicyValueFunction:
 # Pydantic 请求模型
 # ──────────────────────────────────────────────
 class NewGameRequest(BaseModel):
-    human_player: int   = Field(1, description="人类棋子颜色: 1=黑子(先手), 2=白子")
-    difficulty:   str   = Field("medium", description="难度: easy / medium / hard")
+    human_player: int = Field(1, description="人类棋子颜色: 1=黑子(先手), 2=白子")
+    difficulty: str = Field("medium", description="难度: easy / medium / hard")
 
 
 class MoveRequest(BaseModel):
@@ -75,6 +77,16 @@ class MoveRequest(BaseModel):
 @app.get("/", include_in_schema=False)
 async def index():
     return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
+
+
+@app.get("/api/difficulty_config")
+async def difficulty_config():
+    return {
+        "ok": True,
+        "difficulty_playout": get_difficulty_playout(),
+        "train_total_games": int(config.N_SELFPLAY_GAMES),
+        "train_playout": int(config.N_PLAYOUT_TRAIN),
+    }
 
 
 @app.post("/api/new_game")
@@ -136,7 +148,7 @@ async def ai_move(session_id: str):
     if s.board.current_player != s.ai_player:
         raise HTTPException(400, "现在不是 AI 的回合")
 
-    model  = get_model()
+    model = get_model()
     player = s.get_mcts_player(model.policy_value_fn)
     # temp=1e-3 → 近似贪心（对弈时不需要探索）
     action = player.get_action(s.board, temp=1e-3)
@@ -171,6 +183,7 @@ async def get_hint(session_id: str):
         raise HTTPException(400, "游戏已结束")
 
     import numpy as np
+
     model = get_model()
     action_probs, value = model.policy_value_fn(s.board)
     n = s.board.size
@@ -178,7 +191,7 @@ async def get_hint(session_id: str):
     for a, p in action_probs:
         heatmap[a] = p
     return {
-        "ok":      True,
+        "ok": True,
         "heatmap": heatmap.tolist(),
-        "value":   round(float(value), 4),
+        "value": round(float(value), 4),
     }

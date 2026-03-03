@@ -216,7 +216,7 @@ class Game:
                 sys.path.append(release_path)
             import gomoku_cpp
 
-            self.board = gomoku_cpp.Board()
+            self.board = gomoku_cpp.Board(config.BOARD_SIZE, config.N_IN_ROW)
             player.reset()
         else:
             self.board.reset()

@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>五子棋 AlphaZero — 人机对战</title>
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
+
 <body>
   <div id="app">
     <!-- ── 标题 ─────────────────────────────── -->
@@ -35,9 +37,12 @@
       <div class="form-row">
         <label>AI 难度</label>
         <div class="radio-group">
-          <label class="radio-label"><input type="radio" name="difficulty" value="easy" /> 简单（200次模拟）</label>
-          <label class="radio-label"><input type="radio" name="difficulty" value="medium" checked /> 中等（400次模拟）</label>
-          <label class="radio-label"><input type="radio" name="difficulty" value="hard" /> 困难（800次模拟）</label>
+          <label class="radio-label" id="difficulty-easy"><input type="radio" name="difficulty" value="easy" />
+            简单（自动）</label>
+          <label class="radio-label" id="difficulty-medium"><input type="radio" name="difficulty" value="medium"
+              checked /> 中等（自动）</label>
+          <label class="radio-label" id="difficulty-hard"><input type="radio" name="difficulty" value="hard" />
+            困难（自动）</label>
         </div>
       </div>
 
@@ -67,9 +72,9 @@
 
       <!-- 操作按钮 -->
       <div class="btn-row">
-        <button id="btn-hint"   class="btn btn-secondary">💡 提示</button>
+        <button id="btn-hint" class="btn btn-secondary">💡 提示</button>
         <button id="btn-resign" class="btn btn-danger">🏳 认输</button>
-        <button id="btn-new"    class="btn btn-primary">🔄 新游戏</button>
+        <button id="btn-new" class="btn btn-primary">🔄 新游戏</button>
       </div>
 
       <!-- 落子记录 -->
@@ -84,13 +89,14 @@
       <div class="result-dialog">
         <div id="result-icon" class="result-icon"></div>
         <h2 id="result-title"></h2>
-        <p  id="result-desc"></p>
+        <p id="result-desc"></p>
         <button id="btn-result-new" class="btn btn-primary" style="margin-top:16px">再来一局</button>
       </div>
     </div>
   </div>
 
-  <script src="/static/js/board.js"></script>
-  <script src="/static/js/game.js"></script>
+  <script src="/static/js/board.js?v=20260302"></script>
+  <script src="/static/js/game.js?v=20260302"></script>
 </body>
+
 </html>

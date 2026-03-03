@@ -27,18 +27,19 @@ using PyInferenceFn = std::function<
     std::pair<py::array_t<float>, float>(py::array_t<float>)>;
 
 // Wrapper: adapt Python NN function as C++ InferenceFn
-InferenceFn wrap_infer(PyInferenceFn py_fn)
+InferenceFn wrap_infer(PyInferenceFn py_fn, int board_size)
 {
-    return [py_fn](const float *state_in, float *probs_out, float &value_out)
+    return [py_fn, board_size](const float *state_in, float *probs_out, float &value_out)
     {
         py::gil_scoped_acquire acquire; // Calling Python requires GIL
         // Construct numpy array view, zero-copy
-        std::array<py::ssize_t, 3> shape = {4, BOARD_SIZE, BOARD_SIZE};
+        std::array<py::ssize_t, 3> shape = {4, board_size, board_size};
         py::array_t<float> state_arr(shape, state_in);
         auto [probs_arr, value] = py_fn(state_arr);
         value_out = value;
         auto buf = probs_arr.request();
-        std::memcpy(probs_out, buf.ptr, N_SQUARES * sizeof(float));
+        int n_squares = board_size * board_size;
+        std::memcpy(probs_out, buf.ptr, n_squares * sizeof(float));
     };
 }
 
@@ -46,21 +47,22 @@ InferenceFn wrap_infer(PyInferenceFn py_fn)
 class CppMCTSPlayer
 {
 public:
-    CppMCTSPlayer(PyInferenceFn py_fn, float c_puct, int n_playout)
-        : mcts_(wrap_infer(py_fn), c_puct, n_playout) {}
+    CppMCTSPlayer(PyInferenceFn py_fn, float c_puct, int n_playout, int board_size)
+        : board_size_(board_size), mcts_(wrap_infer(py_fn, board_size), c_puct, n_playout) {}
 
     // Returns (action, full_prob_vector: np.ndarray(N*N,))
     std::pair<int, py::array_t<float>>
     get_move(const Board &board, float temp = 1e-3f)
     {
-        std::vector<int> acts(N_SQUARES);
-        std::vector<float> probs(N_SQUARES);
+        int n_squares = board.n_squares();
+        std::vector<int> acts(n_squares);
+        std::vector<float> probs(n_squares);
         int n = mcts_.search(board, acts.data(), probs.data(), temp);
 
         // Construct full probs vector
-        py::array_t<float> full_probs(N_SQUARES);
+        py::array_t<float> full_probs(n_squares);
         auto buf = full_probs.mutable_unchecked<1>();
-        for (int i = 0; i < N_SQUARES; ++i)
+        for (int i = 0; i < n_squares; ++i)
             buf(i) = 0.f;
         for (int i = 0; i < n; ++i)
             buf(acts[i]) = probs[i];
@@ -85,6 +87,7 @@ public:
     void reset() { mcts_.update_with_move(-1); }
 
 private:
+    int board_size_;
     MCTS mcts_;
 };
 
@@ -95,12 +98,15 @@ PYBIND11_MODULE(gomoku_cpp, m)
 
     // Board
     py::class_<Board>(m, "Board")
-        .def(py::init<>())
+        .def(py::init<int, int>(), py::arg("size") = 8, py::arg("n_in_row") = 5)
         .def("do_move", &Board::do_move)
         .def("availables", &Board::availables)
         .def("game_over", &Board::game_over)
+        .def("reset", &Board::reset)
         .def_readonly("move_cnt", &Board::move_cnt)
         .def_readonly("last_move", &Board::last_move)
+        .def_property_readonly("size", &Board::size)
+        .def_readonly("n_in_row", &Board::n_in_row)
         .def_property_readonly("winner", [](const Board &b) -> py::object
                                {
             if (!b.winner) return py::none();
@@ -109,7 +115,7 @@ PYBIND11_MODULE(gomoku_cpp, m)
                                { return static_cast<int>(b.current); })
         .def("get_features", [](const Board &b)
              {
-            py::array_t<float> out({4, BOARD_SIZE, BOARD_SIZE});
+            py::array_t<float> out({4, b.size(), b.size()});
             b.get_features(out.mutable_data());
             return out; })
         .def("copy", [](const Board &b)
@@ -117,15 +123,16 @@ PYBIND11_MODULE(gomoku_cpp, m)
 
     // MCTSPlayer
     py::class_<CppMCTSPlayer>(m, "MCTSPlayer")
-        .def(py::init<PyInferenceFn, float, int>(),
+        .def(py::init<PyInferenceFn, float, int, int>(),
              py::arg("policy_value_fn"),
              py::arg("c_puct") = 5.f,
-             py::arg("n_playout") = 400)
+             py::arg("n_playout") = 400,
+             py::arg("board_size") = 8)
         .def("get_move", &CppMCTSPlayer::get_move,
              py::arg("board"), py::arg("temp") = 1e-3f)
         .def("reset", &CppMCTSPlayer::reset);
 
-    m.attr("BOARD_SIZE") = BOARD_SIZE;
-    m.attr("N_SQUARES") = N_SQUARES;
-    m.attr("N_IN_ROW") = N_IN_ROW;
+    m.attr("BOARD_SIZE") = 8;
+    m.attr("N_SQUARES") = 64;
+    m.attr("N_IN_ROW") = 5;
 }
