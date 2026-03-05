@@ -34,6 +34,8 @@ class Board:
         self.last_move: Optional[int] = None  # 最近落子动作
         self.move_count: int = 0
         self.winner: Optional[int] = None  # None=对战中, 0=平局, 1/2=胜者
+        # 增量合法动作集合：O(1) 删除，避免每次 availables 调用全盘扫描
+        self._avail_set: set = set(range(self.size * self.size))
 
     def copy(self) -> "Board":
         b = Board(self.size, self.n_in_row)
@@ -42,6 +44,7 @@ class Board:
         b.last_move = self.last_move
         b.move_count = self.move_count
         b.winner = self.winner
+        b._avail_set = self._avail_set.copy()
         return b
 
     # ──────────────────────────────────────────────
@@ -49,13 +52,8 @@ class Board:
     # ──────────────────────────────────────────────
     @property
     def availables(self) -> List[int]:
-        """返回所有合法动作列表（扁平化下标）。"""
-        return [
-            r * self.size + c
-            for r in range(self.size)
-            for c in range(self.size)
-            if self.board[r, c] == 0
-        ]
+        """返回所有合法动作列表（由增量集合生成，O(k) 而非 O(N²)）。"""
+        return list(self._avail_set)
 
     def action_to_rc(self, action: int) -> Tuple[int, int]:
         return divmod(action, self.size)
@@ -70,12 +68,13 @@ class Board:
         r, c = self.action_to_rc(action)
         assert self.board[r, c] == 0, f"落子位置 ({r},{c}) 已有棋子！"
         self.board[r, c] = self.current_player
+        self._avail_set.discard(action)  # O(1) 增量更新
         self.last_move = action
         self.move_count += 1
         # 检测胜负
         if self._check_winner(r, c):
             self.winner = self.current_player
-        elif not self.availables:
+        elif not self._avail_set:  # O(1) 空集检查，替代 not self.availables
             self.winner = 0  # 平局
         # 切换玩家
         self.current_player = 3 - self.current_player  # 1↔2
@@ -224,6 +223,19 @@ class Game:
 
         states, mcts_probs, current_players = [], [], []
 
+        # ── 认输机制初始化（仅 Python 路径）──────────────────
+        resign_thresh = getattr(config, "RESIGN_THRESHOLD", None)
+        resign_patience = getattr(config, "RESIGN_PATIENCE", 5)
+        resign_min_move = getattr(config, "RESIGN_MIN_MOVE", 30)
+        no_resign_prob = getattr(config, "NO_RESIGN_PROB", 0.1)
+        # 以 no_resign_prob 概率禁用本局认输，避免误判并收集真实对局数据
+        enable_resign = (
+            (not is_cpp)
+            and (resign_thresh is not None)
+            and (np.random.random() >= no_resign_prob)
+        )
+        resign_counter = 0
+
         while not self.board.game_over():
             # 前 TEMP_THRESHOLD 步高温探索
             move_count = self.board.move_cnt if is_cpp else self.board.move_count
@@ -231,13 +243,35 @@ class Game:
 
             if is_cpp:
                 move, move_probs = player.get_move(self.board, t)
-                states.append(self.board.get_features())
+                state = self.board.get_features()
             else:
                 move, move_probs = player.get_action(
                     self.board, temp=t, return_prob=True
                 )
-                states.append(self.board.get_current_state())
+                state = self.board.get_current_state()
 
+                # ── 认输检测（MCTS 搜索刚完成，根节点 Q 值最新）──
+                if enable_resign and move_count >= resign_min_move:
+                    root_val = player.get_root_value()
+                    if root_val < resign_thresh:
+                        resign_counter += 1
+                        if resign_counter >= resign_patience:
+                            # 当前玩家认输 → 对手获胜
+                            winner = 3 - self.board.current_player
+                            winners_z = np.zeros(len(current_players), dtype=np.float32)
+                            if winner != 0:
+                                cp = np.array(current_players)
+                                winners_z[cp == winner] = 1.0
+                                winners_z[cp != winner] = -1.0
+                            play_data = [
+                                (s, p, float(z))
+                                for s, p, z in zip(states, mcts_probs, winners_z)
+                            ]
+                            return winner, play_data
+                    else:
+                        resign_counter = 0  # 形势好转，重置计数器
+
+            states.append(state)
             mcts_probs.append(move_probs)
             current_players.append(self.board.current_player)
             self.board.do_move(move)
@@ -249,8 +283,8 @@ class Game:
             winners_z[np.array(current_players) == winner] = 1.0
             winners_z[np.array(current_players) != winner] = -1.0
 
-        # 对称扩充 → 8× 数据量
-        play_data = []
-        for s, p, z in zip(states, mcts_probs, winners_z):
-            play_data.extend(Board.augment_data(s, p, float(z)))
+        # 存储原始样本，不在采集时做增强。
+        # 增强推迟到 ReplayBuffer.sample() 中随机按需选取一种变换，
+        # 避免同一局面的 8 种变换同时进入同一 batch（降低样本相关性）。
+        play_data = [(s, p, float(z)) for s, p, z in zip(states, mcts_probs, winners_z)]
         return winner, play_data

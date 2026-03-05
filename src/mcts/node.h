@@ -92,6 +92,7 @@ namespace mcts
     // 简单 Arena 分配器（避免 new/delete 碎片化）
     // 注意：容量一旦耗尽不自动扩容，因为扩容会导致 vector 重分配，
     //       令所有已发出的 MCTSNode* 指针悬空。
+    // used_ 使用 std::atomic 支持并行 playout 时的线程安全 alloc。
     // ──────────────────────────────────────────────
     class NodeArena
     {
@@ -101,29 +102,33 @@ namespace mcts
 
         MCTSNode *alloc(MCTSNode *parent, float prior)
         {
-            if (used_ >= pool_.size())
+            // fetch_add 保证多线程下每个线程获得唯一槽位
+            size_t idx = used_.fetch_add(1, std::memory_order_relaxed);
+            if (idx >= pool_.size())
             {
                 throw std::overflow_error(
                     "NodeArena capacity exceeded; increase initial capacity");
             }
-            MCTSNode *node = &pool_[used_++];
+            MCTSNode *node = &pool_[idx];
             new (node) MCTSNode(parent, prior);
             return node;
         }
 
         void reset()
         {
-            // 析构所有已使用节点
-            for (size_t i = 0; i < used_; ++i)
+            // 仅析构已使用的节点，O(used) 而非 O(capacity)
+            size_t n = used_.load(std::memory_order_relaxed);
+            for (size_t i = 0; i < n; ++i)
                 pool_[i].~MCTSNode();
-            used_ = 0;
+            used_.store(0, std::memory_order_relaxed);
         }
 
-        size_t size() const { return used_; }
+        size_t size() const { return used_.load(std::memory_order_relaxed); }
+        size_t capacity() const { return pool_.size(); }
 
     private:
         std::vector<MCTSNode> pool_;
-        size_t used_;
+        std::atomic<size_t> used_;
     };
 
 } // namespace mcts

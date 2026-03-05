@@ -13,6 +13,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/functional.h>
 #include <pybind11/stl.h>
+#include <random>
 
 #include "game/gomoku.h"
 #include "mcts/mcts.h"
@@ -47,8 +48,11 @@ InferenceFn wrap_infer(PyInferenceFn py_fn, int board_size)
 class CppMCTSPlayer
 {
 public:
-    CppMCTSPlayer(PyInferenceFn py_fn, float c_puct, int n_playout, int board_size)
-        : board_size_(board_size), mcts_(wrap_infer(py_fn, board_size), c_puct, n_playout) {}
+    CppMCTSPlayer(PyInferenceFn py_fn, float c_puct, int n_playout,
+                  int board_size, int n_threads = 1)
+        : board_size_(board_size),
+          mcts_(wrap_infer(py_fn, board_size), c_puct, n_playout, n_threads),
+          rng_(std::random_device{}()) {}
 
     // Returns (action, full_prob_vector: np.ndarray(N*N,))
     std::pair<int, py::array_t<float>>
@@ -67,8 +71,9 @@ public:
         for (int i = 0; i < n; ++i)
             buf(acts[i]) = probs[i];
 
-        // Sample action by probabilities
-        float r = static_cast<float>(rand()) / RAND_MAX;
+        // 使用线程安全的 mt19937 采样（替代全局状态 rand()）
+        std::uniform_real_distribution<float> dist(0.f, 1.f);
+        float r = dist(rng_);
         float cum = 0.f;
         int chosen = acts[0];
         for (int i = 0; i < n; ++i)
@@ -89,6 +94,7 @@ public:
 private:
     int board_size_;
     MCTS mcts_;
+    std::mt19937 rng_;
 };
 
 // -- Module definition ----------------------------------
@@ -98,7 +104,7 @@ PYBIND11_MODULE(gomoku_cpp, m)
 
     // Board
     py::class_<Board>(m, "Board")
-        .def(py::init<int, int>(), py::arg("size") = 8, py::arg("n_in_row") = 5)
+        .def(py::init<int, int>(), py::arg("size") = 15, py::arg("n_in_row") = 5)
         .def("do_move", &Board::do_move)
         .def("availables", &Board::availables)
         .def("game_over", &Board::game_over)
@@ -123,16 +129,17 @@ PYBIND11_MODULE(gomoku_cpp, m)
 
     // MCTSPlayer
     py::class_<CppMCTSPlayer>(m, "MCTSPlayer")
-        .def(py::init<PyInferenceFn, float, int, int>(),
+        .def(py::init<PyInferenceFn, float, int, int, int>(),
              py::arg("policy_value_fn"),
              py::arg("c_puct") = 5.f,
              py::arg("n_playout") = 400,
-             py::arg("board_size") = 8)
+             py::arg("board_size") = 15,
+             py::arg("n_threads") = 1)
         .def("get_move", &CppMCTSPlayer::get_move,
              py::arg("board"), py::arg("temp") = 1e-3f)
         .def("reset", &CppMCTSPlayer::reset);
 
-    m.attr("BOARD_SIZE") = 8;
-    m.attr("N_SQUARES") = 64;
+    m.attr("BOARD_SIZE") = 15;
+    m.attr("N_SQUARES") = 225;
     m.attr("N_IN_ROW") = 5;
 }

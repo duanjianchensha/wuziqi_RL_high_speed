@@ -8,6 +8,7 @@
 #include <optional>
 #include <cassert>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace gomoku
 {
@@ -32,7 +33,8 @@ namespace gomoku
     {
         int board_size = 8;
         int n_in_row = 5;
-        std::vector<int8_t> cells; // 0=空, 1=黑, 2=白
+        std::vector<int8_t> cells;          // 0=空, 1=黑, 2=白
+        std::unordered_set<int> avail_set_; // 增量合法动作集合，O(1) 删除/查询
 
         Player current = Player::Black;
         int last_move = -1; // -1 = 无
@@ -50,6 +52,10 @@ namespace gomoku
             {
                 throw std::invalid_argument("n_in_row must be in [2, board_size]");
             }
+            // 初始化合法动作集合
+            avail_set_.reserve(size * size);
+            for (int i = 0; i < size * size; ++i)
+                avail_set_.insert(i);
         }
 
         int size() const { return board_size; }
@@ -62,6 +68,9 @@ namespace gomoku
             last_move = -1;
             move_cnt = 0;
             winner.reset();
+            avail_set_.clear();
+            for (int i = 0; i < n_squares(); ++i)
+                avail_set_.insert(i);
         }
 
         // ── 查询 ────────────────────────────────
@@ -83,12 +92,8 @@ namespace gomoku
 
         std::vector<int> availables() const
         {
-            std::vector<int> avail;
-            avail.reserve(n_squares() - move_cnt);
-            for (int i = 0; i < n_squares(); ++i)
-                if (!occupied(i))
-                    avail.push_back(i);
-            return avail;
+            // O(k) 返回剩余合法动作，由增量集合维护而非全盘扫描
+            return std::vector<int>(avail_set_.begin(), avail_set_.end());
         }
 
         // ── 落子 ────────────────────────────────
@@ -97,6 +102,7 @@ namespace gomoku
             assert(action >= 0 && action < n_squares());
             assert(!occupied(action));
             cells[action] = static_cast<int8_t>(current);
+            avail_set_.erase(action); // O(1) 增量删除
             last_move = action;
             ++move_cnt;
 
@@ -105,7 +111,7 @@ namespace gomoku
             {
                 winner = static_cast<int>(current);
             }
-            else if (move_cnt == n_squares())
+            else if (avail_set_.empty()) // O(1) 空检查
             {
                 winner = 0; // 平局
             }

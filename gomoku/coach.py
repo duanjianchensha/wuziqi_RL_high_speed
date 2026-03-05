@@ -103,6 +103,13 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
             avail = board_or_state.availables
             return list(zip(avail, probs[avail])), float(v.item())
 
+    def batch_infer_fn(states_arr: np.ndarray):
+        """批量推理：(B,4,N,N) → (probs(B,N²), values(B,))，用于 MCTS 叶节点批处理。"""
+        t = torch.from_numpy(states_arr).to(worker_device)
+        with torch.no_grad():
+            logp, v = net(t)
+        return F.softmax(logp, dim=1).cpu().numpy(), v.cpu().numpy()
+
     if USE_CPP:
         player = gomoku_cpp.MCTSPlayer(
             policy_value_fn,
@@ -112,7 +119,11 @@ def _selfplay_worker(args: dict) -> List[Tuple]:
         )
     else:
         player = MCTSPlayer(
-            policy_value_fn, c_puct=config.C_PUCT, n_playout=n_playout, is_selfplay=True
+            policy_value_fn,
+            c_puct=config.C_PUCT,
+            n_playout=n_playout,
+            is_selfplay=True,
+            batch_infer_fn=batch_infer_fn,
         )
 
     if USE_CPP:
@@ -179,15 +190,77 @@ class Coach:
         )
         self.replay_buf = ReplayBuffer(config.BUFFER_SIZE)
         print(f"[Coach] ReplayBuffer 就绪（容量={config.BUFFER_SIZE:,}）", flush=True)
-        self.lr_mult = config.LR_MULTIPLIER  # 自适应学习率倍率
+
+        # 训练状态：优先从持久化文件恢复（寝机继续训练）
+        self.lr_mult = config.LR_MULTIPLIER
         self.n_games_played = 0
         self.win_ratio_history: List[float] = []
+        self._load_train_state()
+
+        # CUDA worker 安全检查（必须在创建 executor 前执行）
+        # 每个 worker 独立将模型加载到 GPU，过多 worker 会导致 OOM。
+        max_cuda_w = getattr(config, "MAX_CUDA_WORKERS", 6)
+        if (
+            getattr(config, "WORKER_DEVICE", "cpu") == "cuda"
+            and config.N_WORKERS > max_cuda_w
+        ):
+            print(
+                f"[Coach] 警告: WORKER_DEVICE=cuda 时 N_WORKERS={config.N_WORKERS} "
+                f"超过安全上限 MAX_CUDA_WORKERS={max_cuda_w}，已自动限制。"
+                f"（在 config.py 中调整 MAX_CUDA_WORKERS 可修改此限制）",
+                flush=True,
+            )
+            config.N_WORKERS = max_cuda_w
 
         # 持久化进程池：避免每轮重复 spawn 带来的额外开销
         self.executor = ProcessPoolExecutor(
             max_workers=config.N_WORKERS,
             mp_context=mp.get_context("spawn"),
         )
+
+    def _load_train_state(self) -> None:
+        """Crash 恢复：从 JSON 加载 lr_mult / n_games_played。"""
+        import json
+
+        state_path = getattr(config, "TRAIN_STATE_PATH", None)
+        if not state_path or not os.path.exists(state_path):
+            return
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state = json.load(f)
+            self.lr_mult = float(state.get("lr_mult", self.lr_mult))
+            self.n_games_played = int(state.get("n_games_played", self.n_games_played))
+            self.win_ratio_history = list(state.get("win_ratio_history", []))
+            print(
+                f"[Coach] 训练状态已恢复: n_games={self.n_games_played}, "
+                f"lr_mult={self.lr_mult:.3f}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[Coach] 训练状态加载失败（已忽略）: {e}", flush=True)
+
+    def _save_train_state(self) -> None:
+        """Crash 恢复：将 lr_mult / n_games_played 写入 JSON。"""
+        import json
+
+        state_path = getattr(config, "TRAIN_STATE_PATH", None)
+        if not state_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "lr_mult": self.lr_mult,
+                        "n_games_played": self.n_games_played,
+                        "win_ratio_history": self.win_ratio_history[-200:],
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+        except Exception as e:
+            print(f"[Coach] 训练状态保存失败（已忽略）: {e}", flush=True)
 
     def _get_scheduled_playout(self, total_games: int) -> int:
         if not config.ENABLE_PLAYOUT_SCHEDULE:
@@ -260,14 +333,18 @@ class Coach:
     def _train(self) -> dict:
         """
         从 replay buffer 采样 EPOCHS_PER_UPDATE 次，返回最后一次的 loss 信息。
-        使用自适应学习率（KL 散度监控）。
+        使用自适应学习率（KL 散度监控）+ 线性 Warmup（前 LR_WARMUP_GAMES 局）。
         """
-        lr = config.LR * self.lr_mult
+        # LR 热身：前 LR_WARMUP_GAMES 局内从 LR*0.1 线性升温到 LR
+        warmup_games = getattr(config, "LR_WARMUP_GAMES", 300)
+        warmup_mult = min(1.0, 0.1 + 0.9 * (self.n_games_played / max(1, warmup_games)))
+        lr = config.LR * self.lr_mult * warmup_mult
         last_info = {}
         t_train = time.time()
+        warmup_tag = f" warmup={warmup_mult:.2f}" if warmup_mult < 1.0 else ""
         print(
             f"[Train] 开始训练 {config.EPOCHS_PER_UPDATE} 个 epoch "
-            f"(lr={lr:.2e}, batch={config.BATCH_SIZE}, "
+            f"(lr={lr:.2e}{warmup_tag}, batch={config.BATCH_SIZE}, "
             f"缓冲池={len(self.replay_buf):,})",
             flush=True,
         )
@@ -303,6 +380,8 @@ class Coach:
         )
         last_info["lr"] = lr
         last_info["lr_mult"] = self.lr_mult
+        # 每次训练后立即持久化状态，寝机可从此进度恢复。
+        self._save_train_state()
         return last_info
 
     # ── 评估：新模型 vs 纯 MCTS ───────────────────
@@ -315,10 +394,10 @@ class Coach:
         def policy_fn(board):
             return self.policy.policy_value_fn(board)
 
-        new_player = MCTSPlayer(
-            policy_fn, c_puct=config.C_PUCT, n_playout=config.N_PLAYOUT_TRAIN
-        )
-        pure_player = PureMCTSPlayer(n_playout=config.N_PLAYOUT_EVAL)
+        # 双方使用相同 n_playout，避免搜索算力不对等造成的系统性偏差
+        eval_playout = config.N_PLAYOUT_TRAIN
+        new_player = MCTSPlayer(policy_fn, c_puct=config.C_PUCT, n_playout=eval_playout)
+        pure_player = PureMCTSPlayer(n_playout=eval_playout)
         board = Board(config.BOARD_SIZE, config.N_IN_ROW)
         game = Game(board)
 
@@ -326,7 +405,7 @@ class Coach:
         t_eval = time.time()
         print(
             f"[Eval] 开始评估 {n_games} 局"
-            f"（新模型 vs 纯MCTS-{config.N_PLAYOUT_EVAL}次模拟）",
+            f"（新模型 vs 纯MCTS，双方均 {eval_playout} 次模拟）",
             flush=True,
         )
         for i in range(n_games):
@@ -391,16 +470,16 @@ class Coach:
             progress_pct = self.n_games_played / total_games * 100
             bar_len = 30
             filled = int(bar_len * self.n_games_played / total_games)
-            bar = "█" * filled + "░" * (bar_len - filled)
-            print(f"\n{'─'*60}", flush=True)
+            bar = "#" * filled + "-" * (bar_len - filled)
+            print(f"\n{'='*60}", flush=True)
             print(
                 f"[Iter {iteration}] [{bar}] {progress_pct:.1f}% "
-                f"({self.n_games_played}/{total_games}局) "
-                f"| 最佳胜率={best_ratio:.3f} "
-                f"| 缓冲池={len(self.replay_buf):,}",
+                f"({self.n_games_played}/{total_games}) "
+                f"| best_wr={best_ratio:.3f} "
+                f"| buf={len(self.replay_buf):,}",
                 flush=True,
             )
-            print(f"{'─'*60}", flush=True)
+            print(f"{'='*60}", flush=True)
 
             # 1. 并行自弈采集
             n_gw = config.GAMES_PER_WORKER
@@ -413,25 +492,34 @@ class Coach:
                 f"(schedule={'ON' if config.ENABLE_PLAYOUT_SCHEDULE else 'OFF'})",
                 flush=True,
             )
+            t_selfplay = time.time()
             samples = self._collect_selfplay_data(n_w, n_gw, current_playout)
-            elapsed = time.time() - t0
+            elapsed_selfplay = time.time() - t_selfplay
+            selfplay_sps = samples / max(elapsed_selfplay, 1e-3)
 
             print(
                 f"[Iter {iteration}] 自弈采集完毕: {samples} 样本 "
-                f"(总局数={self.n_games_played}/{total_games}, 耗时={elapsed:.1f}s)",
+                f"({selfplay_sps:.0f} samples/s, 总局数={self.n_games_played}/{total_games}, 耗时={elapsed_selfplay:.1f}s)",
                 flush=True,
             )
 
             # 2. 训练（缓冲池满足最小批次后才开始）
             if self.replay_buf.ready(config.BATCH_SIZE):
+                t_train_start = time.time()
                 info = self._train()
+                elapsed_train_iter = time.time() - t_train_start
+                total_iter_time = time.time() - t0
+                train_sps = (config.BATCH_SIZE * config.EPOCHS_PER_UPDATE) / max(
+                    elapsed_train_iter, 1e-3
+                )
                 print(
                     f"[Train] loss={info['loss']:.4f}  "
                     f"loss_v={info['loss_v']:.4f}  "
                     f"loss_p={info['loss_p']:.4f}  "
                     f"kl={info['kl']:.4f}  "
                     f"lr={info['lr']:.2e}  "
-                    f"lr_mult={info['lr_mult']:.2f}"
+                    f"lr_mult={info['lr_mult']:.2f}  "
+                    f"train_sps={train_sps:.0f}  总耗时={total_iter_time:.1f}s"
                 )
             else:
                 print(
@@ -440,15 +528,14 @@ class Coach:
                 )
                 continue
 
-            # 3. 保存当前模型
-            cur_path = config.CURRENT_POLICY
-            self.policy.save(cur_path)
-
-            # 4. 定期评估
+            # 3. 定期评估
             if iteration % config.CHECK_FREQ == 0:
                 print(f"\n[Eval] 第 {iteration} 轮评估...")
+                # 评估前先保存当前模型
+                self.policy.save(config.CURRENT_POLICY)
                 win_ratio = self._evaluate(config.EVAL_GAMES)
                 self.win_ratio_history.append(win_ratio)
+                self._save_train_state()  # 持久化含最新胜率历史的训练状态
 
                 ckpt_path = os.path.join(
                     config.CHECKPOINT_DIR,

@@ -5,6 +5,7 @@
 #pragma once
 #include "node.h"
 #include "../game/gomoku.h"
+#include "thread_pool.h"
 
 #include <functional>
 #include <vector>
@@ -14,6 +15,7 @@
 #include <condition_variable>
 #include <numeric>
 #include <cmath>
+#include <memory>
 
 namespace mcts
 {
@@ -32,8 +34,11 @@ namespace mcts
     class MCTS
     {
     public:
-        MCTS(InferenceFn infer_fn, float c_puct = 5.f, int n_playout = 400)
-            : infer_fn_(std::move(infer_fn)), c_puct_(c_puct), n_playout_(n_playout), arena_(200000)
+        MCTS(InferenceFn infer_fn, float c_puct = 5.f, int n_playout = 400,
+             int n_threads = 1)
+            : infer_fn_(std::move(infer_fn)), c_puct_(c_puct),
+              n_playout_(n_playout), arena_(3000000),
+              pool_(n_threads > 1 ? std::make_unique<ThreadPool>(n_threads) : nullptr)
         {
             root_ = arena_.alloc(nullptr, 1.f);
         }
@@ -44,10 +49,30 @@ namespace mcts
                    int *actions_out, float *probs_out,
                    float temp = 1e-3f)
         {
-            for (int i = 0; i < n_playout_; ++i)
+            if (pool_)
             {
-                gomoku::Board b = board; // 副本
-                _playout(b, root_);
+                // 并行 playout：spawn n_playout 个任务到线程池
+                // virtual loss 防止多线程选择同一路径
+                std::vector<std::future<void>> futures;
+                futures.reserve(n_playout_);
+                for (int i = 0; i < n_playout_; ++i)
+                {
+                    futures.push_back(pool_->submit([this, board]()
+                                                    {
+                        gomoku::Board b = board;
+                        _playout(b, root_); }));
+                }
+                for (auto &f : futures)
+                    f.get(); // 等待所有 playout 完成
+            }
+            else
+            {
+                // 单线程路径（默认）
+                for (int i = 0; i < n_playout_; ++i)
+                {
+                    gomoku::Board b = board;
+                    _playout(b, root_);
+                }
             }
 
             // 收集子节点访问次数
@@ -104,7 +129,9 @@ namespace mcts
             return n;
         }
 
-        // 树复用：移动根节点到 last_move 子节点
+        // 树复用：移动根节点到 last_move 子节点（惰性复用）
+        // 找到匹配子节点时不重置 arena——旧节点被遗弃但无需释放（惰性策略）。
+        // 仅当 arena 接近满载时才强制重置，避免 overflow_error。
         void update_with_move(int last_move)
         {
             if (last_move >= 0)
@@ -114,14 +141,18 @@ namespace mcts
                     if (a == last_move)
                     {
                         child->parent = nullptr;
-                        // 无法释放 arena，重建更简单（Phase 2 可优化）
-                        MCTS new_mcts(infer_fn_, c_puct_, n_playout_);
-                        // 直接重置（简化版本）
-                        goto reset;
+                        root_ = child;
+                        // 若 arena 已用量超过 60%，主动重置以防后续溢出
+                        if (arena_.size() > arena_.capacity() * 6 / 10)
+                        {
+                            arena_.reset();
+                            root_ = arena_.alloc(nullptr, 1.f);
+                        }
+                        return; // 成功复用，直接返回
                     }
                 }
             }
-        reset:
+            // move 未找到或 last_move == -1：完全重置
             arena_.reset();
             root_ = arena_.alloc(nullptr, 1.f);
         }
@@ -134,6 +165,7 @@ namespace mcts
         int n_playout_;
         NodeArena arena_;
         MCTSNode *root_ = nullptr;
+        std::unique_ptr<ThreadPool> pool_; // nullptr = 单线程模式
 
         void _playout(gomoku::Board &board, MCTSNode *node)
         {

@@ -27,12 +27,12 @@ class MCTSNode:
     __slots__ = ("parent", "children", "n_visits", "_W", "_Q", "_P")
 
     def __init__(self, parent: Optional["MCTSNode"], prior_p: float):
-        self.parent:   Optional["MCTSNode"] = parent
+        self.parent: Optional["MCTSNode"] = parent
         self.children: Dict[int, "MCTSNode"] = {}
-        self.n_visits: int   = 0
-        self._W:       float = 0.0   # 累计价值
-        self._Q:       float = 0.0   # 均值价值
-        self._P:       float = prior_p
+        self.n_visits: int = 0
+        self._W: float = 0.0  # 累计价值
+        self._Q: float = 0.0  # 均值价值
+        self._P: float = prior_p
 
     # ── PUCT 值 ────────────────────────────────
     def get_value(self, c_puct: float) -> float:
@@ -54,12 +54,25 @@ class MCTSNode:
     def update(self, leaf_value: float) -> None:
         self.n_visits += 1
         self._W += leaf_value
-        self._Q  = self._W / self.n_visits
+        self._Q = self._W / self.n_visits
 
     def update_recursive(self, leaf_value: float) -> None:
         if self.parent:
             self.parent.update_recursive(-leaf_value)
         self.update(leaf_value)
+
+    # ── Virtual Loss（批量 MCTS 用）──────────────
+    def apply_vl(self, weight: float = 1.0) -> None:
+        """沿路径施加虚拟损失，使后续 playout 不倾向于重复选此节点。"""
+        self.n_visits += 1
+        self._W -= weight
+        self._Q = self._W / self.n_visits
+
+    def undo_vl(self, weight: float = 1.0) -> None:
+        """在真实反向传播完成后移除虚拟损失。"""
+        self.n_visits -= 1
+        self._W += weight
+        self._Q = self._W / self.n_visits if self.n_visits > 0 else 0.0
 
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -74,26 +87,67 @@ class MCTSNode:
 class MCTS:
     """
     Monte Carlo Tree Search，使用 policy_value_fn 进行叶节点扩展与价值估计。
+
+    支持两种推理模式：
+      • 单步模式（默认）：每次 playout 单独调用 policy_value_fn（batch=1）
+      • 批量模式：提供 batch_infer_fn 后，每 LEAF_BATCH_SIZE 个叶节点
+        打包一次前向传播，显著减少 GPU/CPU 推理调用次数
     """
 
-    def __init__(self, policy_value_fn: Callable, c_puct: float = config.C_PUCT,
-                 n_playout: int = config.N_PLAYOUT_TRAIN):
+    def __init__(
+        self,
+        policy_value_fn: Callable,
+        c_puct: float = config.C_PUCT,
+        n_playout: int = config.N_PLAYOUT_TRAIN,
+        batch_infer_fn=None,
+    ):
         self._policy_value_fn = policy_value_fn
-        self._c_puct  = c_puct
+        # batch_infer_fn(states: np.ndarray(B,4,N,N)) -> (probs(B,N²), values(B,))
+        self._batch_infer_fn = batch_infer_fn
+        self._c_puct = c_puct
         self._n_playout = n_playout
-        self._root    = MCTSNode(None, 1.0)
+        self._root = MCTSNode(None, 1.0)
+
+    # ── 选择到叶节点 ────────────────────────────────
+    def _select_to_leaf(self, board):
+        """从根节点向下选择直到叶节点，返回 (leaf_node, board_at_leaf)。"""
+        node = self._root
+        while not node.is_leaf():
+            if board.game_over():
+                break
+            action, node = node.select(self._c_puct)
+            board.do_move(action)
+        return node, board
+
+    def _select_to_leaf_vl(self, board):
+        """
+        带 Virtual Loss 的选择：沿路径每个节点立即施加 VL，使同 batch 内后续
+        playout 选择其他路径（提高叶节点多样性）。
+        返回 (leaf_node, board_at_leaf, path_nodes)。
+        """
+        node = self._root
+        path = [node]
+        node.apply_vl()
+        while not node.is_leaf():
+            if board.game_over():
+                break
+            action, node = node.select(self._c_puct)
+            board.do_move(action)
+            node.apply_vl()
+            path.append(node)
+        return node, board, path
+
+    # ── 根节点价值（认输检测用）───────────────────
+    def get_root_value(self) -> float:
+        """返回根节点均值价值（当前玩家视角）。须在 get_move_probs() 之后调用。"""
+        return self._root._Q
 
     def _playout(self, board) -> None:
         """
         从根节点执行一次模拟（选择 → 扩展 → 估值 → 反向传播）。
         board 为临时副本，原 board 不变。
         """
-        node = self._root
-        while True:
-            if node.is_leaf():
-                break
-            action, node = node.select(self._c_puct)
-            board.do_move(action)
+        node, board = self._select_to_leaf(board)
 
         # 调用神经网络：得到 (action_probs, value)
         action_priors, leaf_value = self._policy_value_fn(board)
@@ -110,18 +164,23 @@ class MCTS:
 
         node.update_recursive(-leaf_value)
 
-    def get_move_probs(self, board, temp: float = 1e-3) -> Tuple[np.ndarray, np.ndarray]:
+    def get_move_probs(
+        self, board, temp: float = 1e-3
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         运行 n_playout 次模拟，返回根节点处各动作的概率分布。
         temp: 温度，高温（=1）探索，低温（→0）利用
         返回: (actions, probs) 均为 numpy 数组
         """
-        for _ in range(self._n_playout):
-            board_copy = board.copy()
-            self._playout(board_copy)
+        if self._batch_infer_fn is not None:
+            self._run_batched_playouts(board)
+        else:
+            for _ in range(self._n_playout):
+                board_copy = board.copy()
+                self._playout(board_copy)
 
         children = self._root.children
-        acts   = np.array(list(children.keys()), dtype=np.int32)
+        acts = np.array(list(children.keys()), dtype=np.int32)
         visits = np.array([n.n_visits for n in children.values()], dtype=np.float32)
 
         if temp < 0.01:
@@ -132,11 +191,64 @@ class MCTS:
         else:
             # 数值稳定的温度采样：log-space 避免大幂次溢出
             log_v = np.log(visits + 1e-10) / temp
-            log_v -= log_v.max()             # softmax 稳定化
-            probs  = np.exp(log_v)
-            probs  = probs / probs.sum()
-        probs = probs / probs.sum()   # 二次归一化，消除浮点误差
+            log_v -= log_v.max()  # softmax 稳定化
+            probs = np.exp(log_v)
+            probs = probs / probs.sum()
+        probs = probs / probs.sum()  # 二次归一化，消除浮点误差
         return acts, probs
+
+    def _run_batched_playouts(self, board) -> None:
+        """
+        批量叶节点推理（含 Virtual Loss）。
+
+        每收集 LEAF_BATCH_SIZE 个叶节点打包一次 NN 前向；同时在选择阶段
+        对路径施加 Virtual Loss，使同 batch 内后续 playout 倾向于探索
+        不同路径，从而提高叶节点多样性（避免 batch 内全部选同一叶节点）。
+        VL 在真实反向传播前撤销，不影响树的最终统计。
+        """
+        batch_size = config.LEAF_BATCH_SIZE
+        sims_done = 0
+        while sims_done < self._n_playout:
+            this_batch = min(batch_size, self._n_playout - sims_done)
+            sims_done += this_batch
+
+            # Phase 1：带 Virtual Loss 的选择阶段
+            # nn_pending / term_pending 元素格式：(node, board_copy, path)
+            nn_pending = []
+            term_pending = []
+
+            for _ in range(this_batch):
+                bc = board.copy()
+                node, bc, path = self._select_to_leaf_vl(bc)
+                if bc.game_over():
+                    term_pending.append((node, bc, path))
+                else:
+                    nn_pending.append((node, bc, path))
+
+            # Phase 2：批量 NN 推理（非终局叶节点）
+            if nn_pending:
+                states = np.stack(
+                    [bc.get_current_state() for _, bc, _ in nn_pending], axis=0
+                )  # (B, 4, N, N)
+                all_probs, all_values = self._batch_infer_fn(states)
+                for (node, bc, path), probs, value in zip(
+                    nn_pending, all_probs, all_values
+                ):
+                    # 撤销 Virtual Loss 后再做真实反向传播
+                    for n in path:
+                        n.undo_vl()
+                    if node.is_leaf():
+                        avail = bc.availables
+                        node.expand(list(zip(avail, probs[avail])))
+                    node.update_recursive(-float(value))
+
+            # Phase 3：终局反向传播
+            for node, bc, path in term_pending:
+                for n in path:
+                    n.undo_vl()
+                w = bc.winner
+                lv = 0.0 if w == 0 else (1.0 if w != bc.current_player else -1.0)
+                node.update_recursive(-lv)
 
     def update_with_move(self, last_move: int) -> None:
         """
@@ -161,16 +273,22 @@ class MCTSPlayer:
       • 对弈模式（is_selfplay=False）：高温或低温选择
     """
 
-    def __init__(self, policy_value_fn: Callable,
-                 c_puct: int    = config.C_PUCT,
-                 n_playout: int = config.N_PLAYOUT_TRAIN,
-                 is_selfplay: bool = False):
+    def __init__(
+        self,
+        policy_value_fn: Callable,
+        c_puct: int = config.C_PUCT,
+        n_playout: int = config.N_PLAYOUT_TRAIN,
+        is_selfplay: bool = False,
+        batch_infer_fn=None,
+    ):
         self.policy_value_fn = policy_value_fn
-        self.c_puct     = c_puct
-        self.n_playout  = n_playout
+        self.c_puct = c_puct
+        self.n_playout = n_playout
         self.is_selfplay = is_selfplay
         self.player: Optional[int] = None
-        self.mcts = MCTS(policy_value_fn, c_puct, n_playout)
+        self.mcts = MCTS(
+            policy_value_fn, c_puct, n_playout, batch_infer_fn=batch_infer_fn
+        )
 
     def set_player_ind(self, p: int) -> None:
         self.player = p
@@ -178,15 +296,18 @@ class MCTSPlayer:
     def reset_player(self) -> None:
         self.mcts.update_with_move(-1)
 
-    def get_action(self, board, temp: float = 1e-3,
-                   return_prob: bool = False):
+    def get_root_value(self) -> float:
+        """返回 MCTS 根节点均值价值（当前玩家视角）。用于认输检测。"""
+        return self.mcts.get_root_value()
+
+    def get_action(self, board, temp: float = 1e-3, return_prob: bool = False):
         """
         选择落子动作。
         return_prob=True 时返回 (action, full_prob_vector)，
         否则只返回 action。
         """
         avail = board.availables
-        n_sq  = board.size * board.size
+        n_sq = board.size * board.size
         move_probs = np.zeros(n_sq, dtype=np.float32)
 
         if not avail:
@@ -197,15 +318,14 @@ class MCTSPlayer:
 
         if self.is_selfplay:
             # 自弈：混入 Dirichlet 噪声增加探索
-            noise = np.random.dirichlet(
-                config.DIRICHLET_ALPHA * np.ones(len(probs)))
+            noise = np.random.dirichlet(config.DIRICHLET_ALPHA * np.ones(len(probs)))
             mixed = (1 - config.DIRICHLET_EPS) * probs + config.DIRICHLET_EPS * noise
-            mixed = mixed / mixed.sum()          # 归一化，消除浮点误差
+            mixed = mixed / mixed.sum()  # 归一化，消除浮点误差
             move = int(np.random.choice(acts, p=mixed))
-            self.mcts.update_with_move(move)          # 复用树
+            self.mcts.update_with_move(move)  # 复用树
         else:
             move = int(np.random.choice(acts, p=probs))
-            self.mcts.update_with_move(-1)             # 对弈时每步重置
+            self.mcts.update_with_move(-1)  # 对弈时每步重置
 
         if return_prob:
             return move, move_probs
@@ -243,7 +363,7 @@ class PureMCTSPlayer:
     def __init__(self, n_playout: int = config.N_PLAYOUT_EVAL):
         self.n_playout = n_playout
         self.player: Optional[int] = None
-        self.mcts  = MCTS(_rollout_policy, c_puct=5.0, n_playout=n_playout)
+        self.mcts = MCTS(_rollout_policy, c_puct=5.0, n_playout=n_playout)
 
     def set_player_ind(self, p: int) -> None:
         self.player = p
@@ -275,6 +395,7 @@ def _try_import_cpp():
     """
     try:
         import gomoku_cpp
+
         return gomoku_cpp
     except ImportError:
         return None
@@ -283,10 +404,12 @@ def _try_import_cpp():
 _CPP_MOD = _try_import_cpp()
 
 
-def make_mcts_player(policy_value_fn: Callable,
-                     c_puct: float = config.C_PUCT,
-                     n_playout: int = config.N_PLAYOUT_TRAIN,
-                     is_selfplay: bool = False) -> MCTSPlayer:
+def make_mcts_player(
+    policy_value_fn: Callable,
+    c_puct: float = config.C_PUCT,
+    n_playout: int = config.N_PLAYOUT_TRAIN,
+    is_selfplay: bool = False,
+) -> MCTSPlayer:
     """
     工厂函数：
       • 若 C++ 加速模块已编译 (gomoku_cpp.so/.pyd)，则返回 C++ 版 MCTSPlayer 包装。
@@ -319,6 +442,7 @@ class _CppPlayerWrapper:
 
     def get_action(self, board, temp: float = 1e-3, return_prob: bool = False):
         import numpy as np
+
         # C++ board 需单独构建；此处仍使用 Python Board，传入状态给 C++ MCTS
         # （C++ MCTSPlayer 接受 gomoku_cpp.Board，简化实现：fallback to Python）
         # 完整 C++ 集成需要统一棋盘表示，留作 Phase 2 完整集成

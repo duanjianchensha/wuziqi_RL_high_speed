@@ -113,7 +113,8 @@ class PolicyValueFunction:
     def __init__(self, board_size: int = config.BOARD_SIZE, model_path: str = None):
         self.device = torch.device(config.DEVICE)
         self.model = PolicyValueNet(board_size).to(self.device)
-        self.optimizer = optim.Adam(
+        # AdamW 正确解耦 L2 正则化方向与梯度自适应方向（比 Adam+weight_decay 更规范）
+        self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=config.LR,
             weight_decay=config.L2_CONST,
@@ -197,17 +198,24 @@ class PolicyValueFunction:
             loss_p = -torch.mean(torch.sum(p * logp, dim=1))
             loss = loss_v + loss_p
 
+        # 训练前向完成后立即保存 logp（梯度更新前的策略输出），
+        # 避免 backward+step 后再做一次完整 eval 前向（节省约 50% 前向计算）
+        logp_before = logp.detach()
+
         self.scaler.scale(loss).backward()
+        # 梯度裁剪：防止训练早期或崩溃后梯度爆炸导致 NaN loss。
+        # 必须在 unscale_ 之后、step() 之前执行。
+        self.scaler.unscale_(self.optimizer)
+        torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=config.GRAD_CLIP
+        )
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        # 计算 MCTS prob 与旧策略 KL（用于自适应学习率）
+        # 用保存的训练前向输出计算 KL，无需额外 eval 前向传播
         with torch.no_grad():
-            self.model.eval()
-            with autocast(device_type=config.DEVICE, enabled=self._use_amp):
-                logp_new, _ = self.model(s)
             kl = torch.mean(
-                torch.sum(p * (torch.log(p + 1e-10) - logp_new), dim=1)
+                torch.sum(p * (torch.log(p + 1e-10) - logp_before), dim=1)
             ).item()
 
         return {
