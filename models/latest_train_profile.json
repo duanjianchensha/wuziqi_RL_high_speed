@@ -1,6 +1,7 @@
 {
   "n_selfplay_games": 5000,
-  "n_playout_train": 300,
-  "n_workers": 20,
-  "batch_size": 512
+  "n_playout_train": 420,
+  "n_workers": 3,
+  "batch_size": 384,
+  "mix_expert_replay_ratio": 0.15
 }

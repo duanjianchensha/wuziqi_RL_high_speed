@@ -157,21 +157,49 @@ class MCTS:
             if w == 0:
                 leaf_value = 0.0
             else:
-                # 注意：board.current_player 已切换，需反转
-                leaf_value = 1.0 if w != board.current_player else -1.0
+                # board.current_player 已切换到下一位玩家：
+                # 若 winner == current_player，说明"当前要走的人"赢了 → +1
+                # 若 winner != current_player，说明"当前要走的人"输了 → -1
+                leaf_value = 1.0 if w == board.current_player else -1.0
         else:
             node.expand(action_priors)
 
         node.update_recursive(-leaf_value)
 
     def get_move_probs(
-        self, board, temp: float = 1e-3
+        self, board, temp: float = 1e-3, add_noise: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         运行 n_playout 次模拟，返回根节点处各动作的概率分布。
         temp: 温度，高温（=1）探索，低温（→0）利用
         返回: (actions, probs) 均为 numpy 数组
         """
+        # --- 强制展开根节点 ---。避免批量推理时第一批 16 个模拟全部撞在未展开的根节点导致浪费。
+        if self._root.is_leaf() and not board.game_over():
+            if self._batch_infer_fn is not None:
+                state = board.get_current_state()
+                states = np.stack([state], axis=0)  # (1, 4, N, N)
+                all_probs, all_values = self._batch_infer_fn(states)
+                act_probs = all_probs[0][board.availables]
+                if act_probs.sum() > 0:
+                    act_probs /= act_probs.sum()
+                action_priors = list(zip(board.availables, act_probs))
+                leaf_value = float(all_values[0])
+            else:
+                action_priors, leaf_value = self._policy_value_fn(board)
+            self._root.expand(action_priors)
+            self._root.update_recursive(-leaf_value)
+
+        # --- AlphaZero 标准做法：在根节点 P 上注入 Dirichlet 噪声，以引导 MCTS 探索未知分支 ---
+        if add_noise and not self._root.is_leaf():
+            actions = list(self._root.children.keys())
+            noise = np.random.dirichlet(config.DIRICHLET_ALPHA * np.ones(len(actions)))
+            for i, act in enumerate(actions):
+                c = self._root.children[act]
+                c._P = (1 - config.DIRICHLET_EPS) * c._P + config.DIRICHLET_EPS * noise[
+                    i
+                ]
+
         if self._batch_infer_fn is not None:
             self._run_batched_playouts(board)
         else:
@@ -239,7 +267,10 @@ class MCTS:
                         n.undo_vl()
                     if node.is_leaf():
                         avail = bc.availables
-                        node.expand(list(zip(avail, probs[avail])))
+                        act_probs = probs[avail]
+                        if act_probs.sum() > 0:
+                            act_probs /= act_probs.sum()
+                        node.expand(list(zip(avail, act_probs)))
                     node.update_recursive(-float(value))
 
             # Phase 3：终局反向传播
@@ -247,7 +278,7 @@ class MCTS:
                 for n in path:
                     n.undo_vl()
                 w = bc.winner
-                lv = 0.0 if w == 0 else (1.0 if w != bc.current_player else -1.0)
+                lv = 0.0 if w == 0 else (1.0 if w == bc.current_player else -1.0)
                 node.update_recursive(-lv)
 
     def update_with_move(self, last_move: int) -> None:
@@ -313,15 +344,13 @@ class MCTSPlayer:
         if not avail:
             raise RuntimeError("没有可用动作！")
 
-        acts, probs = self.mcts.get_move_probs(board, temp)
+        acts, probs = self.mcts.get_move_probs(board, temp, add_noise=self.is_selfplay)
         move_probs[acts] = probs
 
         if self.is_selfplay:
-            # 自弈：混入 Dirichlet 噪声增加探索
-            noise = np.random.dirichlet(config.DIRICHLET_ALPHA * np.ones(len(probs)))
-            mixed = (1 - config.DIRICHLET_EPS) * probs + config.DIRICHLET_EPS * noise
-            mixed = mixed / mixed.sum()  # 归一化，消除浮点误差
-            move = int(np.random.choice(acts, p=mixed))
+            # 噪声已经加到了 MCTS 的根节点先验概率中，MCTS 的搜索结果已经受到了噪声的正确引导
+            # 这里只需根据 MCTS 搜索得出的分布正常采样即可
+            move = int(np.random.choice(acts, p=probs))
             self.mcts.update_with_move(move)  # 复用树
         else:
             move = int(np.random.choice(acts, p=probs))

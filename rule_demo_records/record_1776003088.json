@@ -1,0 +1,402 @@
+{
+  "timestamp": "2026-04-12 22:11:28",
+  "human_player": 1,
+  "winner": 2,
+  "winner_label": "规则AI",
+  "total_moves": 56,
+  "duration_sec": 145.3,
+  "moves": [
+    {
+      "move": 1,
+      "player": 1,
+      "row": 7,
+      "col": 7,
+      "side": "人类"
+    },
+    {
+      "move": 2,
+      "player": 2,
+      "row": 6,
+      "col": 7,
+      "side": "规则AI"
+    },
+    {
+      "move": 3,
+      "player": 1,
+      "row": 7,
+      "col": 8,
+      "side": "人类"
+    },
+    {
+      "move": 4,
+      "player": 2,
+      "row": 7,
+      "col": 6,
+      "side": "规则AI"
+    },
+    {
+      "move": 5,
+      "player": 1,
+      "row": 7,
+      "col": 9,
+      "side": "人类"
+    },
+    {
+      "move": 6,
+      "player": 2,
+      "row": 7,
+      "col": 10,
+      "side": "规则AI"
+    },
+    {
+      "move": 7,
+      "player": 1,
+      "row": 6,
+      "col": 8,
+      "side": "人类"
+    },
+    {
+      "move": 8,
+      "player": 2,
+      "row": 5,
+      "col": 8,
+      "side": "规则AI"
+    },
+    {
+      "move": 9,
+      "player": 1,
+      "row": 8,
+      "col": 5,
+      "side": "人类"
+    },
+    {
+      "move": 10,
+      "player": 2,
+      "row": 4,
+      "col": 9,
+      "side": "规则AI"
+    },
+    {
+      "move": 11,
+      "player": 1,
+      "row": 3,
+      "col": 10,
+      "side": "人类"
+    },
+    {
+      "move": 12,
+      "player": 2,
+      "row": 8,
+      "col": 6,
+      "side": "规则AI"
+    },
+    {
+      "move": 13,
+      "player": 1,
+      "row": 9,
+      "col": 6,
+      "side": "人类"
+    },
+    {
+      "move": 14,
+      "player": 2,
+      "row": 8,
+      "col": 7,
+      "side": "规则AI"
+    },
+    {
+      "move": 15,
+      "player": 1,
+      "row": 6,
+      "col": 5,
+      "side": "人类"
+    },
+    {
+      "move": 16,
+      "player": 2,
+      "row": 7,
+      "col": 5,
+      "side": "规则AI"
+    },
+    {
+      "move": 17,
+      "player": 1,
+      "row": 7,
+      "col": 4,
+      "side": "人类"
+    },
+    {
+      "move": 18,
+      "player": 2,
+      "row": 10,
+      "col": 7,
+      "side": "规则AI"
+    },
+    {
+      "move": 19,
+      "player": 1,
+      "row": 5,
+      "col": 6,
+      "side": "人类"
+    },
+    {
+      "move": 20,
+      "player": 2,
+      "row": 4,
+      "col": 7,
+      "side": "规则AI"
+    },
+    {
+      "move": 21,
+      "player": 1,
+      "row": 6,
+      "col": 9,
+      "side": "人类"
+    },
+    {
+      "move": 22,
+      "player": 2,
+      "row": 6,
+      "col": 3,
+      "side": "规则AI"
+    },
+    {
+      "move": 23,
+      "player": 1,
+      "row": 5,
+      "col": 7,
+      "side": "人类"
+    },
+    {
+      "move": 24,
+      "player": 2,
+      "row": 4,
+      "col": 6,
+      "side": "规则AI"
+    },
+    {
+      "move": 25,
+      "player": 1,
+      "row": 4,
+      "col": 8,
+      "side": "人类"
+    },
+    {
+      "move": 26,
+      "player": 2,
+      "row": 8,
+      "col": 10,
+      "side": "规则AI"
+    },
+    {
+      "move": 27,
+      "player": 1,
+      "row": 8,
+      "col": 3,
+      "side": "人类"
+    },
+    {
+      "move": 28,
+      "player": 2,
+      "row": 9,
+      "col": 2,
+      "side": "规则AI"
+    },
+    {
+      "move": 29,
+      "player": 1,
+      "row": 8,
+      "col": 9,
+      "side": "人类"
+    },
+    {
+      "move": 30,
+      "player": 2,
+      "row": 9,
+      "col": 9,
+      "side": "规则AI"
+    },
+    {
+      "move": 31,
+      "player": 1,
+      "row": 10,
+      "col": 8,
+      "side": "人类"
+    },
+    {
+      "move": 32,
+      "player": 2,
+      "row": 3,
+      "col": 9,
+      "side": "规则AI"
+    },
+    {
+      "move": 33,
+      "player": 1,
+      "row": 9,
+      "col": 10,
+      "side": "人类"
+    },
+    {
+      "move": 34,
+      "player": 2,
+      "row": 10,
+      "col": 11,
+      "side": "规则AI"
+    },
+    {
+      "move": 35,
+      "player": 1,
+      "row": 6,
+      "col": 10,
+      "side": "人类"
+    },
+    {
+      "move": 36,
+      "player": 2,
+      "row": 6,
+      "col": 11,
+      "side": "规则AI"
+    },
+    {
+      "move": 37,
+      "player": 1,
+      "row": 7,
+      "col": 11,
+      "side": "人类"
+    },
+    {
+      "move": 38,
+      "player": 2,
+      "row": 5,
+      "col": 9,
+      "side": "规则AI"
+    },
+    {
+      "move": 39,
+      "player": 1,
+      "row": 6,
+      "col": 6,
+      "side": "人类"
+    },
+    {
+      "move": 40,
+      "player": 2,
+      "row": 2,
+      "col": 9,
+      "side": "规则AI"
+    },
+    {
+      "move": 41,
+      "player": 1,
+      "row": 1,
+      "col": 9,
+      "side": "人类"
+    },
+    {
+      "move": 42,
+      "player": 2,
+      "row": 8,
+      "col": 8,
+      "side": "规则AI"
+    },
+    {
+      "move": 43,
+      "player": 1,
+      "row": 6,
+      "col": 4,
+      "side": "人类"
+    },
+    {
+      "move": 44,
+      "player": 2,
+      "row": 8,
+      "col": 4,
+      "side": "规则AI"
+    },
+    {
+      "move": 45,
+      "player": 1,
+      "row": 9,
+      "col": 4,
+      "side": "人类"
+    },
+    {
+      "move": 46,
+      "player": 2,
+      "row": 5,
+      "col": 10,
+      "side": "规则AI"
+    },
+    {
+      "move": 47,
+      "player": 1,
+      "row": 7,
+      "col": 12,
+      "side": "人类"
+    },
+    {
+      "move": 48,
+      "player": 2,
+      "row": 5,
+      "col": 11,
+      "side": "规则AI"
+    },
+    {
+      "move": 49,
+      "player": 1,
+      "row": 5,
+      "col": 12,
+      "side": "人类"
+    },
+    {
+      "move": 50,
+      "player": 2,
+      "row": 3,
+      "col": 8,
+      "side": "规则AI"
+    },
+    {
+      "move": 51,
+      "player": 1,
+      "row": 2,
+      "col": 7,
+      "side": "人类"
+    },
+    {
+      "move": 52,
+      "player": 2,
+      "row": 1,
+      "col": 10,
+      "side": "规则AI"
+    },
+    {
+      "move": 53,
+      "player": 1,
+      "row": 0,
+      "col": 11,
+      "side": "人类"
+    },
+    {
+      "move": 54,
+      "player": 2,
+      "row": 9,
+      "col": 5,
+      "side": "规则AI"
+    },
+    {
+      "move": 55,
+      "player": 1,
+      "row": 10,
+      "col": 5,
+      "side": "人类"
+    },
+    {
+      "move": 56,
+      "player": 2,
+      "row": 7,
+      "col": 2,
+      "side": "规则AI"
+    }
+  ]
+}

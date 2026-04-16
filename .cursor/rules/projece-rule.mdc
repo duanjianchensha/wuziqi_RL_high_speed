@@ -1,0 +1,6 @@
+---
+alwaysApply: true
+---
+
+py使用名为'ship'的conda环境
+机器为win11环境，注意终端命令语法

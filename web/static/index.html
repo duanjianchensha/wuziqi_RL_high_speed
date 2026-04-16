@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>五子棋 AlphaZero — 人机对战</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/style.css?v=20260324" />
 </head>
 
 <body>
@@ -15,6 +15,19 @@
       <h1>⚫ 五子棋 AlphaZero</h1>
       <p class="subtitle">基于强化学习的人机对战</p>
     </header>
+
+    <!-- ── 模型管理 ──────────────────────────── -->
+    <div id="train-panel" class="panel train-panel">
+      <h2>模型</h2>
+
+      <div class="form-row">
+        <label>对弈加载权重</label>
+        <div class="train-row-inline">
+          <select id="sel-play-model" class="train-select"></select>
+          <button type="button" id="btn-apply-model" class="btn btn-secondary">应用并热重载</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ── 设置面板（新游戏前显示） ─────────── -->
     <div id="setup-panel" class="panel">
@@ -95,8 +108,8 @@
     </div>
   </div>
 
-  <script src="/static/js/board.js?v=20260302"></script>
-  <script src="/static/js/game.js?v=20260302"></script>
+  <script src="/static/js/board.js?v=20260322"></script>
+  <script src="/static/js/game.js?v=20260324"></script>
 </body>
 
 </html>

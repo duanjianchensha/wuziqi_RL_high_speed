@@ -16,6 +16,7 @@
 #include <numeric>
 #include <cmath>
 #include <memory>
+#include <random>
 
 namespace mcts
 {
@@ -47,8 +48,42 @@ namespace mcts
         // actions_out, visits_out: 调用方分配（至少 board.n_squares() 大小）
         int search(const gomoku::Board &board,
                    int *actions_out, float *probs_out,
-                   float temp = 1e-3f)
+                   float temp = 1e-3f, float dirichlet_alpha = 0.0f, float dirichlet_eps = 0.0f)
         {
+            if (dirichlet_eps > 0.0f)
+            {
+                if (!root_->expanded)
+                {
+                    gomoku::Board b = board;
+                    _playout(b, root_); // Expand root synchronously
+                }
+
+                if (root_->expanded && !root_->children.empty())
+                {
+                    std::random_device rd;
+                    std::mt19937 gen(rd());
+                    std::gamma_distribution<float> gamma(dirichlet_alpha, 1.0f);
+
+                    float sum = 0.0f;
+                    std::vector<float> noise(root_->children.size());
+                    for (size_t i = 0; i < noise.size(); ++i)
+                    {
+                        noise[i] = gamma(gen);
+                        sum += noise[i];
+                    }
+
+                    if (sum > 0.0f)
+                    {
+                        for (size_t i = 0; i < noise.size(); ++i)
+                        {
+                            root_->children[i].second->P =
+                                (1.0f - dirichlet_eps) * root_->children[i].second->P +
+                                dirichlet_eps * (noise[i] / sum);
+                        }
+                    }
+                }
+            }
+
             if (pool_)
             {
                 // 并行 playout：spawn n_playout 个任务到线程池

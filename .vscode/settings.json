@@ -16,5 +16,8 @@
         "type": true,
         "Start-Job": true,
         "scripts\\build.bat": true
-    }
+    },
+    "commentTranslate.targetLanguage": "zh-CN",
+    "cursor.general.disableHttp2": true,
+    "python.languageServer": "Pylance"
 }

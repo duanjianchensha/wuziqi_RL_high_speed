@@ -1,7 +1,8 @@
 # 五子棋 AlphaZero AI — 项目文档
 
-> 基于 AlphaZero 范式的五子棋强化学习 AI，Python + PyTorch 实现神经网络训练，  
-> C++ 实现高性能 MCTS 搜索引擎，FastAPI + Canvas 提供 Web 人机对战界面。
+> 基于 AlphaZero 范式的五子棋强化学习 AI。  
+> 流水线：**规则数据生成 → 监督预训练 → AlphaZero 自弈强化**，  
+> Python/PyTorch 实现训练，FastAPI + Canvas 提供 Web 人机对战界面。
 
 ---
 
@@ -26,14 +27,17 @@
 
 ## 1. 项目概览
 
-### 1.1 设计目标
+### 1.1 三阶段训练流水线
 
-本项目实现了一个完整的五子棋强化学习系统，包含以下核心组件：
+```
+scripts/gen_rule_data.py          # 规则策略自弈 → models/human_games/rule_data/*.npz
+         ↓
+pretrain.py                       # 监督预训练 → models/current_policy.pth
+         ↓
+train.py                          # AlphaZero 自弈强化 → models/best_policy.pth
+```
 
-- **自我博弈（Self-Play）**：AI 与自身对弈，自动生成训练数据
-- **策略-价值网络**：PyTorch ResNet，同时输出落子概率分布与局面评估值
-- **MCTS 搜索**：蒙特卡洛树搜索引擎，在神经网络引导下进行高质量决策
-- **Web 对战**：浏览器内与 AI 进行人机对战
+**规则预训练的必要性**：纯随机初始化网络在 15×15 棋盘上需要极长时间才能探索出有效落子策略。用规则策略（威胁评估 + 搜索）生成的 5000～20000 局数据先做监督预训练，可将自弈起点的棋力提高约 20～30 代自弈效果，大幅缩短总训练时间。
 
 ### 1.2 技术栈
 
@@ -49,41 +53,51 @@
 ### 1.3 文件结构
 
 ```
-gomoku_alphazero/
-├── train.py                   ← 训练入口
+/
+├── train.py                   ← 自弈强化训练入口
+├── pretrain.py                ← 规则数据监督预训练入口
 ├── server.py                  ← Web 服务入口
-├── requirements.txt           ← Python 依赖
+├── full_train_pipeline.ps1    ← 一键三阶段流水线（Windows）
+├── requirements.txt
 ├── CMakeLists.txt             ← C++ 构建配置
 │
 ├── gomoku/                    ← Python 核心包
-│   ├── config.py              ← 所有超参数（CPU/GPU 自适应）
+│   ├── config.py              ← 所有超参数
 │   ├── game.py                ← 棋盘环境
 │   ├── neural_net.py          ← ResNet 策略-价值网络
 │   ├── mcts.py                ← MCTS 搜索（PUCT + Dirichlet 噪声）
 │   ├── replay_buffer.py       ← 经验回放池
-│   └── coach.py               ← 自弈训练主循环
+│   ├── coach.py               ← 自弈训练主循环
+│   ├── rule_player.py         ← 规则策略玩家（数据生成用）
+│   ├── data_utils.py          ← npz 数据加载工具
+│   └── web_ui_prefs.py        ← Web 界面偏好持久化
+│
+├── scripts/
+│   ├── gen_rule_data.py       ← 批量生成规则数据
+│   ├── web_train_pipeline.py  ← Web 一键训练子进程包装
+│   ├── recommend_train_params.py ← 硬件自动推荐超参数
+│   └── build.bat              ← C++ 模块编译脚本
 │
 ├── web/
-│   ├── app.py                 ← FastAPI 路由（7 个接口）
+│   ├── app.py                 ← FastAPI 路由
 │   ├── game_session.py        ← 会话管理（30 分钟 TTL）
+│   ├── train_job.py           ← 后台训练任务管理
 │   └── static/
-│       ├── index.html         ← 对战主页面
-│       ├── css/style.css      ← 深色主题 UI
-│       └── js/
-│           ├── board.js       ← Canvas 棋盘渲染
-│           └── game.js        ← API 交互 + 落子逻辑
+│       ├── index.html
+│       └── js/game.js
 │
-├── models/                    ← 模型权重保存目录
-│   └── best_policy.pth        ← 最优模型（训练后生成）
+├── models/                    ← 权重与训练状态
+│   ├── best_policy.pth
+│   ├── current_policy.pth
+│   ├── checkpoints/           ← 历史快照
+│   └── human_games/rule_data/ ← 规则预训练数据 (*.npz)
 │
 └── src/                       ← C++ 加速模块（Phase 2）
-    ├── game/gomoku.h          ← 位棋盘表示
+    ├── game/gomoku.h
     ├── mcts/
-    │   ├── node.h             ← MCTS 节点（Arena 分配 + atomic）
-    │   ├── mcts.h             ← 并行 MCTS 引擎
-    │   └── thread_pool.h      ← 通用线程池
-    └── bindings.cpp           ← pybind11 模块入口
+    └── bindings.cpp
 ```
+
 
 ---
 
@@ -158,61 +172,52 @@ except ImportError:
 
 ## 3. 快速开始
 
-### 3.1 训练 AI
+### 3.1 完整训练流水线（推荐）
 
 ```bash
-# 使用默认参数（推荐新手）
+# 一键运行三阶段流水线（Windows PowerShell）
+.\full_train_pipeline.ps1
+
+# 或分步执行：
+
+# Step 1：生成规则数据（约 5000 局，~15分钟）
+python scripts/gen_rule_data.py --games 5000 --workers 4
+
+# Step 2：监督预训练（约 80 个 epoch）
+python pretrain.py --epochs 80
+
+# Step 3：AlphaZero 自弈强化
+python train.py --fresh
+```
+
+### 3.2 仅自弈训练（已有预训练模型时）
+
+```bash
+# 从 current_policy.pth 出发继续自弈
 python train.py
 
-# 自定义参数示例
-python train.py \
-  --games 500 \        # 总自弈局数
-  --playout 400 \      # 每步 MCTS 模拟次数
-  --workers 8 \        # 并行自弈进程数
-  --board 8            # 棋盘大小（8×8）
+# 指定参数
+python train.py --games 5000 --playout 400 --workers 4
 
-# 从已有模型继续训练
-python train.py --resume models/best_policy.pth
+# 快速验证流程（小规模）
+python train.py --games 50 --playout 100
 ```
 
-**训练过程中的输出示例：**
-
-```
-[Iteration 1/1000] Self-play: 15 games | Buffer: 1240/10000
-  Train loss: policy=2.341  value=0.812  total=3.153
-[Iteration 50/1000] Evaluating vs PureMCTS(500)...
-  Win: 8 / Loss: 2 / Draw: 0  → Win rate: 80.0% > 55% ✓
-  Saved best model → models/best_policy.pth
-```
-
-### 3.2 启动 Web 对战服务
+### 3.3 启动 Web 对战服务
 
 ```bash
 python server.py
-
-# 指定端口
-python server.py --port 8080
-
-# 指定加载的模型
-python server.py --model models/best_policy.pth
 ```
 
-启动后，在浏览器中打开：
+启动后访问 `http://127.0.0.1:8000`，选择难度与执黑/执白后即可对弈。
 
-```
-http://127.0.0.1:8000
-```
+### 3.4 Web 界面操作
 
-### 3.3 Web 界面操作
-
-1. **选择执黑/执白**：黑子先手，白子后手（AI 执对方颜色）
-2. **选择难度**：
-   - 🟢 简单：AI 每步进行 200 次 MCTS 模拟
-   - 🟡 中等：AI 每步进行 400 次 MCTS 模拟
-   - 🔴 困难：AI 每步进行 800 次 MCTS 模拟
-3. **点击棋盘**：在棋盘交叉点落子
-4. **AI 热图**：勾选"显示 AI 分析"可查看 AI 对各位置的评估热图
-5. **重新开始**：点击"新游戏"按钮重置棋盘
+1. **选择执黑/执白**：黑子先手，白子后手
+2. **选择难度**：简单 / 中等 / 困难（影响 AI MCTS 模拟次数）
+3. **点击棋盘**：在交叉点落子
+4. **AI 热图**：勾选"显示 AI 分析"可查看 AI 评估热图
+5. **重新开始**：点击"新游戏"重置棋盘
 
 ---
 
@@ -225,7 +230,7 @@ http://127.0.0.1:8000
 | 特点 | 说明 |
 |------|------|
 | 稀疏奖励 | 只有终局才有 +1/-1 奖励，中间步骤无即时奖励 |
-| 状态空间巨大 | 8×8 棋盘约 $3^{64}$ 种状态，无法枚举 |
+| 状态空间巨大 | 15×15 棋盘约 $3^{225}$ 种状态，无法枚举 |
 | 完美信息 | 双方均可看到完整棋盘，无随机隐信息 |
 
 相比其他 RL 算法：
@@ -254,6 +259,7 @@ AlphaZero 的核心是将**深度神经网络**与**蒙特卡洛树搜索（MCTS
 │   最小化损失: L = L_policy + L_value + L_reg          │
 └─────────────────────────────────────────────────────┘
 ```
+
 
 - **$f(s; \theta) = (p, v)$**：神经网络接收棋盘状态 $s$，输出：
   - $p$：落子概率向量（策略头），形状 `[board_size²]`
@@ -608,52 +614,52 @@ class MCTSNode:
 
 ## 8. 训练流水线
 
-### 8.1 完整训练循环
+### 8.1 三阶段流水线
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     Coach 训练主循环                      │
-│                                                         │
-│  初始化：随机权重网络 f(s;θ₀)                             │
-│                                                         │
-│  for iteration = 1 to max_iterations:                   │
-│      │                                                   │
-│      ├─ 1. 自弈阶段（多进程并行）                         │
-│      │   ├─ 启动 N_workers 个进程                        │
-│      │   ├─ 每进程运行多局 MCTS(f) 自弈                   │
-│      │   ├─ 收集 (s, π, z) 样本（含8种对称扩充）          │
-│      │   └─ 写入 ReplayBuffer（容量 10000，FIFO）         │
-│      │                                                   │
-│      ├─ 2. 训练阶段                                       │
-│      │   ├─ 从 ReplayBuffer 随机采样 batch_size=512       │
-│      │   ├─ 前向传播：(p, v) = f(s;θ)                    │
-│      │   ├─ 计算损失：L = L_ce(p,π) + L_mse(v,z) + L2    │
-│      │   ├─ 反向传播 + Adam 优化器更新 θ                  │
-│      │   └─ 记录 KL 散度（监测策略变化速度）               │
-│      │                                                   │
-│      └─ 3. 评估阶段（每 50 轮）                           │
-│          ├─ 新模型 f(s;θ_new) vs 纯 MCTS（500 次模拟）    │
-│          ├─ 对局 10 场（5 黑 5 白）                        │
-│          ├─ 胜率 ≥ 55% → 保存为 best_policy.pth           │
-│          └─ 胜率 < 55% → 保留旧模型，降低学习率            │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+#### Phase 1 — 规则数据生成
+
+```bash
+python scripts/gen_rule_data.py --games 5000 --workers 4
+# 输出: models/human_games/rule_data/game_*.npz
 ```
 
-### 8.2 学习率自适应调整
+规则玩家基于威胁评估（五连、活四、冲四、活三等）进行对弈，并加入少量噪声保证多样性。每局保存 `(状态, 访问次数归一化概率, 终局结果)` 三元组。
 
-```python
-# coach.py 中的自适应学习率策略
-if kl_divergence > target_kl * 1.5:
-    # 策略更新太快，降低学习率
-    lr_multiplier /= 1.5
-elif kl_divergence < target_kl / 1.5:
-    # 策略更新太慢，提高学习率
-    lr_multiplier *= 1.5
+#### Phase 2 — 监督预训练
 
-# 更新优化器学习率
-for param_group in optimizer.param_groups:
-    param_group['lr'] = base_lr * lr_multiplier
+```bash
+python pretrain.py --epochs 80
+# 读取 config.RULE_DATA_DIR，写出 models/current_policy.pth
+```
+
+对规则数据做普通交叉熵（策略头）+ MSE（价值头）监督学习。预训练后网络已能识别基本棋型，MCTS 探索起点大幅提高。
+
+#### Phase 3 — AlphaZero 自弈强化
+
+```bash
+python train.py --fresh
+```
+
+标准 AlphaZero 循环：多进程并行自弈 → 数据写入回放池 → mini-batch 梯度更新 → 定期评估保存最优权重。
+
+**混合回放**：每个 batch 中约 15%（`MIX_EXPERT_REPLAY_RATIO=0.15`）采样自规则预训练数据，防止网络忘掉基础棋型知识。
+
+### 8.2 Coach 训练主循环
+
+```
+for iteration = 1 to N_SELFPLAY_GAMES / GAMES_PER_WORKER:
+    │
+    ├─ 1. 多进程自弈
+    │      Worker×N → 各自弈 GAMES_PER_WORKER 局
+    │      收集 (s, π, z) + 8 折对称增强 → 写入 ReplayBuffer
+    │
+    ├─ 2. 网络训练（EPOCHS_PER_UPDATE 轮）
+    │      batch = 自弈样本(85%) + 规则样本(15%)
+    │      L = L_ce(policy) + 0.5×L_mse(value) + L2
+    │
+    └─ 3. 评估（每 CHECK_FREQ 轮）
+           新模型 vs 纯 MCTS(N_PLAYOUT_EVAL)
+           胜率创历史新高 → 保存 best_policy.pth
 ```
 
 ### 8.3 多进程自弈架构
@@ -661,46 +667,22 @@ for param_group in optimizer.param_groups:
 ```
 主进程（Coach）
     │
-    ├─ 分发权重快照（model.state_dict）给所有 Worker
+    ├─ 序列化模型权重（pickle bytes）分发给 Worker
     │
-    ├─ Worker 进程 1 ──→ 自弈 K 局 ──→ 结果队列
-    ├─ Worker 进程 2 ──→ 自弈 K 局 ──→ 结果队列
-    ├─ ...
-    └─ Worker 进程 N ──→ 自弈 K 局 ──→ 结果队列
-                                         │
-                                主进程汇总 ← 收集所有样本
-                                    │
-                              写入 ReplayBuffer
+    ├─ Worker 进程 1 ──→ 自弈 GAMES_PER_WORKER 局 ──→ 返回样本列表
+    ├─ Worker 进程 2 ──→ 自弈 GAMES_PER_WORKER 局 ──→ 返回样本列表
+    └─ ...
+           │
+    主进程汇总后写入 ReplayBuffer
 ```
 
-> **注意（Windows 多进程）**：Windows 下 `multiprocessing` 使用 `spawn` 方式，必须将主进程逻辑包裹在 `if __name__ == '__main__':` 块中，`train.py` 已处理此问题。
+> **Windows 注意**：spawn 多进程要求 worker 函数（`_selfplay_worker`）为顶层函数，`train.py` 已正确设置 `set_start_method('spawn')`。
 
 ### 8.4 ReplayBuffer 设计
 
-```python
-# replay_buffer.py
-class ReplayBuffer:
-    """
-    固定容量的循环经验回放池。
-    最新的样本会替换最老的样本（FIFO）。
-    """
-    def __init__(self, capacity: int = 10000):
-        self.buffer = deque(maxlen=capacity)  # Python deque 天然支持 maxlen FIFO
-
-    def add(self, samples: list):
-        """添加一批样本（每条原始样本扩充为8条后批量添加）"""
-        self.buffer.extend(samples)
-
-    def sample(self, batch_size: int):
-        """随机采样一个 mini-batch"""
-        batch = random.sample(self.buffer, min(batch_size, len(self.buffer)))
-        states, policies, values = zip(*batch)
-        return (
-            torch.tensor(np.array(states),   dtype=torch.float32),
-            torch.tensor(np.array(policies), dtype=torch.float32),
-            torch.tensor(np.array(values),   dtype=torch.float32).unsqueeze(1),
-        )
-```
+- 固定容量 FIFO 队列（`deque(maxlen=BUFFER_SIZE)`）
+- 每条原始样本在加入时做 8 折对称增强（4 旋转 × 2 翻转）
+- 支持 `RECENCY_SAMPLE_ALPHA > 0` 的几何偏重采样（优先新样本）
 
 ---
 
@@ -711,12 +693,19 @@ class ReplayBuffer:
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/api/new_game` | 创建新游戏会话 |
-| `GET` | `/api/game/{session_id}` | 获取当前棋盘状态 |
-| `POST` | `/api/move/{session_id}` | 人类玩家落子 |
-| `POST` | `/api/ai_move/{session_id}` | 请求 AI 落子 |
-| `GET` | `/api/analysis/{session_id}` | 获取 AI 热图分析 |
-| `POST` | `/api/resign/{session_id}` | 认输 |
-| `DELETE` | `/api/game/{session_id}` | 销毁会话 |
+| `GET` | `/api/state/{sid}` | 获取当前棋盘状态 |
+| `POST` | `/api/human_move/{sid}` | 人类玩家落子 |
+| `POST` | `/api/ai_move/{sid}` | AI 落子（MCTS 计算）|
+| `GET` | `/api/hint/{sid}` | AI 落子概率热图 |
+| `POST` | `/api/resign/{sid}` | 认输 |
+| `GET` | `/api/difficulty_config` | 当前难度配置 |
+| `GET` | `/api/model/checkpoints` | 可切换的权重列表 |
+| `POST` | `/api/model/set_play_path` | 热切换对战模型 |
+| `POST` | `/api/reload_model` | 热重载模型权重 |
+| `POST` | `/api/train/start` | 后台启动训练 |
+| `GET` | `/api/train/status` | 查询训练状态 |
+| `GET` | `/api/train/log` | 获取训练日志 |
+| `POST` | `/api/train/stop` | 停止训练 |
 
 **创建新游戏请求体：**
 

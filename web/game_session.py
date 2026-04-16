@@ -71,7 +71,10 @@ class GameSession:
     """
 
     def __init__(
-        self, session_id: str, human_player: int = 1, difficulty: str = "medium"
+        self,
+        session_id: str,
+        human_player: int = 1,
+        difficulty: str = "medium",
     ):
         difficulty_playout = get_difficulty_playout()
         self.session_id = session_id
@@ -131,7 +134,11 @@ class SessionManager:
     def __init__(self):
         self._sessions: Dict[str, GameSession] = {}
 
-    def create(self, human_player: int = 1, difficulty: str = "medium") -> GameSession:
+    def create(
+        self,
+        human_player: int = 1,
+        difficulty: str = "medium",
+    ) -> GameSession:
         sid = str(uuid.uuid4())
         session = GameSession(sid, human_player, difficulty)
         self._sessions[sid] = session

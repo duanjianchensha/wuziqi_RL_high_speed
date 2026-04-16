@@ -3,7 +3,8 @@
 # Python cache
 __pycache__/
 *.pyo
-
+models/checkpoints/
+models/human_games/rule_data/
 # CMake build artifacts
 build/
 cmake-build-*/

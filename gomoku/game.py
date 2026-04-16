@@ -242,7 +242,12 @@ class Game:
             t = 1.0 if move_count < config.TEMP_THRESHOLD else temp
 
             if is_cpp:
-                move, move_probs = player.get_move(self.board, t)
+                move, move_probs = player.get_move(
+                    self.board,
+                    temp=t,
+                    dirichlet_alpha=config.DIRICHLET_ALPHA,
+                    dirichlet_eps=config.DIRICHLET_EPS,
+                )
                 state = self.board.get_features()
             else:
                 move, move_probs = player.get_action(

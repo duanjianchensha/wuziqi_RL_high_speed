@@ -27,6 +27,8 @@ from typing import Optional
 from web.game_session import SessionManager, get_difficulty_playout
 from gomoku.config import config
 from gomoku.neural_net import PolicyValueFunction
+from gomoku.data_utils import list_checkpoints
+from gomoku.web_ui_prefs import load_prefs, set_play_model_path
 
 # ──────────────────────────────────────────────
 # 全局单例：模型 + 会话管理器
@@ -44,18 +46,38 @@ session_manager = SessionManager()
 _model: Optional[PolicyValueFunction] = None
 
 
+def _resolve_project_path(p: str) -> str:
+    """相对路径按项目根目录解析。"""
+    if os.path.isabs(p):
+        return p
+    return os.path.join(_ROOT, p.replace("/", os.sep))
+
+
 def get_model() -> PolicyValueFunction:
     global _model
     if _model is None:
-        best = config.BEST_POLICY
+        from gomoku.web_ui_prefs import get_play_model_path
+
+        load_path: Optional[str] = None
+        pref = get_play_model_path()
+        if pref:
+            pp = _resolve_project_path(pref)
+            if os.path.isfile(pp):
+                load_path = pp
+        if load_path is None:
+            best = _resolve_project_path(config.BEST_POLICY)
+            load_path = best if os.path.isfile(best) else None
         _model = PolicyValueFunction(
             board_size=config.BOARD_SIZE,
-            model_path=best if os.path.exists(best) else None,
+            model_path=load_path,
         )
-        if not os.path.exists(best):
+        if load_path is None:
             print(
-                "[Web] 警告：未找到 best_policy.pth，使用随机初始化网络（先训练再使用）"
+                "[Web] 警告：未找到可用权重（偏好路径与 best_policy 均不存在），使用随机初始化网络",
+                flush=True,
             )
+        elif pref and _resolve_project_path(pref) == load_path:
+            print(f"[Web] 已加载对弈模型: {load_path}", flush=True)
     return _model
 
 
@@ -69,6 +91,11 @@ class NewGameRequest(BaseModel):
 
 class MoveRequest(BaseModel):
     action: int = Field(..., description="落子动作: row*board_size + col")
+
+
+class SetPlayPathRequest(BaseModel):
+    path: str = Field(..., description="相对项目根或绝对路径")
+    reload: bool = Field(True, description="是否立即热重载")
 
 
 # ──────────────────────────────────────────────
@@ -96,7 +123,10 @@ async def new_game(req: NewGameRequest):
         raise HTTPException(400, "human_player 必须为 1 或 2")
     if req.difficulty not in ("easy", "medium", "hard"):
         raise HTTPException(400, "difficulty 必须为 easy/medium/hard")
-    session = session_manager.create(req.human_player, req.difficulty)
+    session = session_manager.create(
+        req.human_player,
+        req.difficulty,
+    )
     return {"ok": True, **session.to_dict()}
 
 
@@ -195,3 +225,38 @@ async def get_hint(session_id: str):
         "heatmap": heatmap.tolist(),
         "value": round(float(value), 4),
     }
+
+
+@app.post("/api/reload_model")
+async def reload_model():
+    """热重载当前偏好路径或 best_policy（无需重启进程）。"""
+    global _model
+    _model = None
+    get_model()
+    return {"ok": True, "message": "已从磁盘重新加载模型权重"}
+
+
+@app.get("/api/model/checkpoints")
+async def model_checkpoints(limit: int = 50):
+    return {"ok": True, "checkpoints": list_checkpoints(limit)}
+
+
+@app.get("/api/model/prefs")
+async def model_prefs():
+    return {"ok": True, "prefs": load_prefs()}
+
+
+@app.post("/api/model/set_play_path")
+async def model_set_play_path(req: SetPlayPathRequest):
+    if not req.path or not req.path.strip():
+        raise HTTPException(400, "path 不能为空")
+    p = req.path.strip()
+    resolved = _resolve_project_path(p)
+    if not os.path.isfile(resolved):
+        raise HTTPException(400, f"文件不存在: {resolved}")
+    set_play_model_path(p)
+    global _model
+    if req.reload:
+        _model = None
+        get_model()
+    return {"ok": True, "play_model_path": p, "resolved": resolved}

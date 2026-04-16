@@ -56,12 +56,12 @@ public:
 
     // Returns (action, full_prob_vector: np.ndarray(N*N,))
     std::pair<int, py::array_t<float>>
-    get_move(const Board &board, float temp = 1e-3f)
+    get_move(const Board &board, float temp = 1e-3f, float dir_alpha = 0.03f, float dir_eps = 0.25f)
     {
         int n_squares = board.n_squares();
         std::vector<int> acts(n_squares);
         std::vector<float> probs(n_squares);
-        int n = mcts_.search(board, acts.data(), probs.data(), temp);
+        int n = mcts_.search(board, acts.data(), probs.data(), temp, dir_alpha, dir_eps);
 
         // Construct full probs vector
         py::array_t<float> full_probs(n_squares);
@@ -136,7 +136,7 @@ PYBIND11_MODULE(gomoku_cpp, m)
              py::arg("board_size") = 15,
              py::arg("n_threads") = 1)
         .def("get_move", &CppMCTSPlayer::get_move,
-             py::arg("board"), py::arg("temp") = 1e-3f)
+             py::arg("board"), py::arg("temp") = 1e-3f, py::arg("dirichlet_alpha") = 0.0f, py::arg("dirichlet_eps") = 0.0f)
         .def("reset", &CppMCTSPlayer::reset);
 
     m.attr("BOARD_SIZE") = 15;

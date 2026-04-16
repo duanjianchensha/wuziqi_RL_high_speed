@@ -34,6 +34,8 @@
   const difficultyMediumLabel = $("difficulty-medium");
   const difficultyHardLabel = $("difficulty-hard");
 
+  const btnReloadModel = $("btn-reload-model");
+
   // ── 游戏状态 ─────────────────────────────────
   let renderer = null;
   let sessionId = null;
@@ -150,7 +152,9 @@
     boardSize = state.board_size || boardSize;
     renderer.setState(state.board, state.last_move, state.human_player);
     updateStatusBar(state);
-    if (state.game_over) showResult(state);
+    if (state.game_over) {
+      showResult(state);
+    }
   }
 
   function updateStatusBar(state) {
@@ -265,7 +269,10 @@
     btnStart.disabled = true;
     btnStart.textContent = "正在连接…";
     try {
-      const state = await api("POST", "/api/new_game", { human_player: humanPlayer, difficulty });
+      const state = await api("POST", "/api/new_game", {
+        human_player: humanPlayer,
+        difficulty,
+      });
       sessionId = state.session_id;
 
       setupPanel.classList.add("hidden");
@@ -317,5 +324,75 @@
     thinkingBar.classList.toggle("hidden", !flag);
   }
 
+  btnReloadModel?.addEventListener("click", async () => {
+    try {
+      await api("POST", "/api/reload_model");
+      alert("已从磁盘热重载模型权重。");
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+
+  // ── 模型选择 ─────────────────────────────────
+  const selPlayModel = $("sel-play-model");
+  const btnApplyModel = $("btn-apply-model");
+
+  async function loadModelSelect() {
+    if (!selPlayModel) return;
+    const presets = ["models/best_policy.pth", "models/current_policy.pth"];
+    let prefPath = "";
+    try {
+      const pr = await api("GET", "/api/model/prefs");
+      if (pr.prefs && pr.prefs.play_model_path) prefPath = String(pr.prefs.play_model_path);
+    } catch (_e) { }
+    selPlayModel.innerHTML = "";
+    presets.forEach(p => {
+      const o = document.createElement("option");
+      o.value = p;
+      o.textContent = p;
+      selPlayModel.appendChild(o);
+    });
+    try {
+      const ck = await api("GET", "/api/model/checkpoints?limit=40");
+      (ck.checkpoints || []).forEach(c => {
+        const o = document.createElement("option");
+        o.value = c.path;
+        o.textContent = c.name;
+        selPlayModel.appendChild(o);
+      });
+    } catch (_e) { }
+    if (prefPath) {
+      let found = false;
+      for (let i = 0; i < selPlayModel.options.length; i++) {
+        if (selPlayModel.options[i].value === prefPath) {
+          selPlayModel.selectedIndex = i;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        const o = document.createElement("option");
+        o.value = prefPath;
+        o.textContent = prefPath + " (当前)";
+        selPlayModel.insertBefore(o, selPlayModel.firstChild);
+        selPlayModel.selectedIndex = 0;
+      }
+    }
+  }
+
+  btnApplyModel?.addEventListener("click", async () => {
+    if (!selPlayModel || !selPlayModel.value) return;
+    try {
+      await api("POST", "/api/model/set_play_path", {
+        path: selPlayModel.value,
+        reload: true,
+      });
+      alert("已保存对弈权重并热重载。");
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+
   loadDifficultyConfig();
+  loadModelSelect();
 })();
