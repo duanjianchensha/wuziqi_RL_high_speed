@@ -1,5 +1,5 @@
 {
-  "n_selfplay_games": 5000,
+  "n_selfplay_games": 900,
   "n_playout_train": 420,
   "n_workers": 3,
   "batch_size": 384,

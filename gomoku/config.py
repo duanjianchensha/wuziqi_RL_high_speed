@@ -31,11 +31,11 @@ class Config:
     ENABLE_PLAYOUT_SCHEDULE: bool = True  # 是否启用按训练进度自动调度 playout
     PLAYOUT_EARLY: int = 273  # 与 scripts/recommend_train_params.py（8G 显存档）一致
     PLAYOUT_MID: int = 420
-    PLAYOUT_LATE: int = 504
-    PLAYOUT_STAGE1_RATIO: float = 0.30  # 前期结束进度比例
-    PLAYOUT_STAGE2_RATIO: float = 0.70  # 中期结束进度比例
+    PLAYOUT_LATE: int = 720  # 后期强搜索：用于已有较强模型时继续抬升上限
+    PLAYOUT_STAGE1_RATIO: float = 0.40  # 约前20 iter（按50 iter目标）
+    PLAYOUT_STAGE2_RATIO: float = 0.60  # 约前30 iter；后20 iter进入第三阶段
     # 评估时双方使用相同次数；应 ≥ 训练主强度，否则「能下赢纯 MCTS」的判别力不足。
-    N_PLAYOUT_EVAL: int = 567
+    N_PLAYOUT_EVAL: int = 720
     N_PLAYOUT_HUMAN: int = 400  # Web 对战时（简单=200, 中=400, 难=800）
     # AlphaZero 论文推荐: alpha ≈ 10 / N_actions = 10/225 ≈ 0.044；使用 0.03 减少初期过度均匀探索
     DIRICHLET_ALPHA: float = 0.03  # Dirichlet 噪声 α（15×15 棋盘，225个动作）
@@ -57,7 +57,8 @@ class Config:
     }
 
     # ───────── 自弈与训练 ─────────
-    N_SELFPLAY_GAMES: int = 5000  # 总自弈局数达到此值前持续迭代
+    # 3 workers × 6 games/iter = 18 games/iter；900 局约等于 50 iter。
+    N_SELFPLAY_GAMES: int = 900  # 以 50 iter 左右完成一轮强化
     # 池子过大时旧策略样本占比高，网络「追着过时标签」跑，棋力曲线显得不涨。
     # 缩小后 FIFO 更快被新自弈填满，策略迭代更猛（代价：长远多样性略减，可再调大）。
     BUFFER_SIZE: int = 13824
